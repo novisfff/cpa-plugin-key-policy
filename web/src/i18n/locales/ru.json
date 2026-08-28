@@ -51,6 +51,8 @@
     "notFound": "Ключ не найден",
     "rotated": "Создан новый ключ (смена)",
     "detail": "Детали",
+    "native": "Нативный CPA",
+    "stale": "Удалён из CPA",
     "mobile": {
       "revoke": "Отозвать",
       "swipeHint": "Смахните влево для отзыва",
@@ -71,13 +73,20 @@
   },
   "new": {
     "title": "Новый ключ",
-    "create": "Создать ключ"
+    "bindTitle": "Привязать ключ CPA",
+    "create": "Создать / привязать политику",
+    "selectNativeKey": "Выберите существующий api-key CPA",
+    "noNativeKeys": "В CPA нет доступных api-keys",
+    "nativeKeyNote": "Сохраняются только необратимый хэш и политика; новый ключ и открытый текст не сохраняются.",
+    "nativeKeyRequired": "Выберите api-key CPA",
+    "nativeLoadFailed": "Не удалось загрузить api-keys CPA"
   },
   "keyForm": {
     "modelsEmpty": "Модели не выбраны",
     "addModel": "Добавить модели",
     "removeModel": "Удалить модель",
     "idLabel": "Key ID *",
+    "idOptionalLabel": "ID политики (необязательно; создаётся автоматически)",
     "idPlaceholder": "напр. team-a",
     "nameLabel": "Имя (необязательно)",
     "namePlaceholder": "Если пусто — используется ID",

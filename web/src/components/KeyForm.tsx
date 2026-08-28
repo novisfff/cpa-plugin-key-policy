@@ -24,6 +24,7 @@ export interface KeyFormValues {
 interface Props {
   initial?: KeyPublic;
   idReadOnly?: boolean;
+  idOptional?: boolean;
   submitLabel: string;
   onSubmit: (v: KeyFormValues) => Promise<void>;
   onCancel: () => void;
@@ -71,6 +72,7 @@ function parseNum(value: string): number {
 export default function KeyForm({
   initial,
   idReadOnly,
+  idOptional,
   submitLabel,
   onSubmit,
   onCancel,
@@ -258,7 +260,7 @@ export default function KeyForm({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLocalErr("");
-    if (!id.trim()) {
+    if (!idOptional && !id.trim()) {
       setLocalErr(t("keyForm.idRequired"));
       return;
     }
@@ -520,7 +522,7 @@ export default function KeyForm({
         {section(t("keyForm.mobile.sectionBasic"), (
           <>
             <div className="form-row">
-              <label>{t("keyForm.idLabel")}</label>
+              <label>{t(idOptional ? "keyForm.idOptionalLabel" : "keyForm.idLabel")}</label>
               <input
                 className={"input" + (idReadOnly ? " mono" : "")}
                 value={id}
@@ -670,7 +672,7 @@ export default function KeyForm({
       <div className="mobile-hidden">
       <div className="row2">
         <div className="form-row">
-          <label>{t("keyForm.idLabel")}</label>
+          <label>{t(idOptional ? "keyForm.idOptionalLabel" : "keyForm.idLabel")}</label>
           <input
             className="input"
             value={id}

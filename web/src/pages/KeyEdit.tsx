@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
-import { listKeys, patchKey, rotateKey, resetRPM, deleteKey } from "../api/keys";
+import { listKeys, patchKey, rotateKey, resetRPM, deleteKey, fetchStatus } from "../api/keys";
 import type { KeyPublic, ModelRule } from "../types";
 import KeyForm from "../components/KeyForm";
 import PlainKeyModal from "../components/PlainKeyModal";
@@ -17,12 +17,14 @@ export default function KeyEdit() {
   const [loading, setLoading] = useState(true);
   const [plain, setPlain] = useState<string | null>(null);
   const [plainTitle, setPlainTitle] = useState("");
+  const [authMode, setAuthMode] = useState<"plugin" | "cpa-native">("plugin");
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        const all = await listKeys();
+        const [all, status] = await Promise.all([listKeys(), fetchStatus()]);
+        setAuthMode(status.auth_mode ?? "plugin");
         const found = all.find((k) => k.id === decodeURIComponent(id ?? ""));
         if (!found) setError(t("keys.notFound"));
         else setKey(found);
@@ -84,7 +86,7 @@ export default function KeyEdit() {
         <h1>{t("edit.hTitle")}</h1>
         <div className="fp-actions">
           <button className="btn sm" onClick={onReset}>{t("keys.resetRpm")}</button>
-          <button className="btn sm" onClick={onRotate}>{t("keys.rotate")}</button>
+          {authMode === "plugin" && key.key_source !== "cpa-native" && <button className="btn sm" onClick={onRotate}>{t("keys.rotate")}</button>}
           <button className="btn sm" onClick={() => nav("/keys")}>{t("keyForm.cancel")}</button>
         </div>
       </div>
@@ -114,7 +116,7 @@ export default function KeyEdit() {
           nav("/keys");
         }}
       />
-      {plain && (
+      {authMode === "plugin" && key.key_source !== "cpa-native" && plain && (
         <PlainKeyModal
           plainKey={plain}
           title={plainTitle}

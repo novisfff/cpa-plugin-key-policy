@@ -51,6 +51,8 @@
     "notFound": "Key not found",
     "rotated": "New key generated (rotated)",
     "detail": "Detail",
+    "native": "CPA native",
+    "stale": "Removed from CPA",
     "mobile": {
       "revoke": "Revoke",
       "swipeHint": "Swipe left to revoke",
@@ -71,13 +73,20 @@
   },
   "new": {
     "title": "New Key",
-    "create": "Create key"
+    "bindTitle": "Bind CPA Key",
+    "create": "Create / bind policy",
+    "selectNativeKey": "Select an existing CPA api-key",
+    "noNativeKeys": "CPA has no available api-keys",
+    "nativeKeyNote": "Only an irreversible hash and policy are stored; no new or plaintext key is persisted.",
+    "nativeKeyRequired": "Select a CPA api-key",
+    "nativeLoadFailed": "Failed to load CPA api-keys"
   },
   "keyForm": {
     "modelsEmpty": "No models selected",
     "addModel": "Add models",
     "removeModel": "Remove model",
     "idLabel": "Key ID *",
+    "idOptionalLabel": "Policy ID (optional; generated when empty)",
     "idPlaceholder": "e.g. team-a",
     "nameLabel": "Name (optional)",
     "namePlaceholder": "Defaults to ID if empty",

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { listKeys, deleteKey, rotateKey, resetRPM } from "../api/keys";
+import { listKeys, deleteKey, fetchStatus, listCPANativeKeys, maskCPAKey, rotateKey, resetRPM } from "../api/keys";
 import type { KeyPublic } from "../types";
 import PlainKeyModal from "../components/PlainKeyModal";
 import { useT } from "../i18n";
@@ -20,12 +20,22 @@ export default function KeyList() {
   const [loading, setLoading] = useState(true);
   const [plain, setPlain] = useState<string | null>(null);
   const [plainTitle, setPlainTitle] = useState<string>("");
+  const [authMode, setAuthMode] = useState<"plugin" | "cpa-native">("plugin");
+  const [liveNativePreviews, setLiveNativePreviews] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      setKeys(await listKeys());
+      const [nextKeys, status] = await Promise.all([listKeys(), fetchStatus()]);
+      setKeys(nextKeys);
+      setAuthMode(status.auth_mode ?? "plugin");
+      if (status.auth_mode === "cpa-native") {
+        const nativeKeys = await listCPANativeKeys();
+        setLiveNativePreviews(new Set(nativeKeys.map(maskCPAKey)));
+      } else {
+        setLiveNativePreviews(new Set());
+      }
     } catch (e) {
       const err = e as { response?: { data?: { error?: { message?: string } } }; message?: string };
       setError(err.response?.data?.error?.message ?? err.message ?? t("keys.loadFailed"));
@@ -91,8 +101,9 @@ export default function KeyList() {
               key={k.id}
               k={k}
               onDelete={onDelete}
-              onRotate={onRotate}
+              onRotate={authMode === "plugin" && k.key_source !== "cpa-native" ? onRotate : undefined}
               onReset={onReset}
+              stale={authMode === "cpa-native" && k.key_source === "cpa-native" && !liveNativePreviews.has(k.key_preview)}
             />
           ))}
         </div>
@@ -122,11 +133,13 @@ function KeyCard({
   onDelete,
   onRotate,
   onReset,
+  stale,
 }: {
   k: KeyPublic;
   onDelete: (id: string) => void;
   onRotate?: (id: string) => void;
   onReset?: (id: string) => void;
+  stale?: boolean;
 }) {
   const t = useT();
   const nav = useNavigate();
@@ -212,6 +225,8 @@ function KeyCard({
       <div className="kc-head">
         <span className="kc-dot" />
         <span className="kc-name">{k.name || k.id}</span>
+        {k.key_source === "cpa-native" && <span className="chip">{t("keys.native")}</span>}
+        {stale && <span className="chip more">{t("keys.stale")}</span>}
         <span className="kc-chevron">›</span>
       </div>
       <div className="kc-preview">{k.key_preview}</div>
