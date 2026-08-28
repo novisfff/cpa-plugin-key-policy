@@ -17,10 +17,10 @@
 
 1. **发钥匙** — 批量创建下游 key，每把绑定可用模型 / 别名。  
 2. **做映射** — 客户端写 `model: fast`，插件转到例如 `codex` + `gpt-5.4-mini`。  
-3. **做限制** — 单 key 的 RPM、可选每日/每周美元额度，按 token 或按次计费。  
+3. **做限制** — 单 key 的 RPM、可选每日/每周美元额度，按 token 或按次计费，以及可选的公平全局并发。
 4. **凭证分档 / 归类** — 请求可以钉死在 Codex free/team 等内置档，或你自定义的归类组，**不会串到别的凭证文件**。  
 5. **多目标别名** — 一个别名挂多个后端（优先 或 轮询）。  
-6. **网页管理** — 在 CPA 里管 key、全局别名、凭证归类。  
+6. **网页管理** — 在 CPA 里管 key、映射、凭证归类、并发配置与运行状态。
 
 ---
 
@@ -82,6 +82,7 @@ CPA 里配置的兼容通道，映射时 `provider` 填通道 **name**。插件�
 | 前端鉴权 | 识别插件 key；校验别名、RPM、额度；写入路由与 group 元数据 |
 | 模型路由 | 别名 → provider + 目标模型 |
 | 调度 | 有 group 时按档位 / `classify:` 过滤凭证 |
+| 请求拦截 + 生命周期 | 推理前公平获取并发 slot；在 `request.complete` 精确释放一次 |
 | 响应拦截 | 非流式 JSON：把顶层 `model` 改回别名 |
 | 用量 | token / 按次计费写入 state |
 | 管理 API + 内嵌网页 | Key、别名、归类、状态 |
@@ -120,13 +121,44 @@ plugins:
       enabled: true
       priority: 10
       state_file: "cpa-key-policy-state.json"
+      concurrency:
+        enabled: false
+        global_limit: 6
+        queue_timeout: 60s
+        max_queue_per_key: 32
 ```
 
 说明：
 
-- 若已有 `state_file`，则以其中的 keys / 别名 / 归类 / 用量为准。
+- 若 `state_file` 已有 `concurrency` 字段，则持久化配置优先于 YAML；网页/API 修改会写回这里。旧 state 没有该字段时仍默认关闭，除非 YAML 明确启用。
+- 并发 limiter **默认关闭**，升级不会改变原有请求行为。
 - 日常请用**网页**或管理 API 建 key 和别名；YAML 种子数据主要用于首次启动。
 - 公开文档里不要写真实管理密钥、主机名或凭证内容。
+
+---
+
+## 动态公平并发限流器
+
+这是一个可选、进程内的全局推理并发限制器。它不会给所有 Key 预切固定配额，而是把闲置容量借给当前活跃用户。若 `global_limit: 6`：
+
+| 活跃下游 Key | 都持续有请求时的稳定分配 |
+|--------------|--------------------------|
+| 只有 A | A = 6 |
+| A + B | A ≈ 3，B ≈ 3 |
+| A + B + C | A ≈ 2，B ≈ 2，C ≈ 2 |
+
+公平调度**不抢占**。新用户加入或调低 limit 时，已经运行的请求不会被中断；每次新释放的 slot 优先给当前 running 最少的 Principal，相同时按最久未获准用户、再按该用户队首请求排序。同一用户内部 FIFO，大量提前排队也不能饿死后来用户；其他人空闲后，单一用户又可以借满全部并发。
+
+slot 满时先排队，而不是立即失败：
+
+- 超过 `queue_timeout` 返回 OpenAI 兼容 HTTP 429，code 为 `concurrency_queue_timeout`，并带 `Retry-After: 1`。
+- 单 Key 超过 `max_queue_per_key` 返回 HTTP 429，code 为 `concurrency_queue_full`。
+- 客户端取消会立即移出队列。
+- 关闭 limiter 时，排队请求不计数放行；已经计数的请求自然结束。
+
+Limiter 接在 CPA 的推理执行钩子上，管理 API、健康检查、静态资源、登录/配置/usage 查询不会进入并发限制。身份优先使用 CPA 提供的不可逆 `caller_scope`，必要时仅临时匹配下游 key；状态只显示 Key ID、名称和掩码预览，绝不显示明文 key 或 Authorization Header。
+
+在本次核对的当前 CLIProxyAPI 中，`request.complete` 覆盖普通 HTTP、流式 EOF/错误、取消/断连及 WebSocket 支持的模型执行。一个 slot 的粒度是一次主机请求执行，不是 WebSocket 每条消息，也不是跨实例配额。Limiter 只在单个 CPA 进程内生效，不同步多实例。若未来主机新增不触发完成事件的 transport，插件无法观察其结束，因此应使用同时提供 `request_interceptor` 与 `request_lifecycle_plugin` 的 CLIProxyAPI 版本。
 
 ---
 
@@ -146,6 +178,7 @@ http://<你的-cpa-主机>:<api端口>/v0/resource/plugins/cpa-key-policy/index.
 | 映射 → 别名 | 全局多目标别名、调度方式、定价 |
 | 映射 → 凭证归类 | 自定义分组规则与命中预览 |
 | 选模型 | 提供商目录；内置档 / **自定义 · …** 子组 |
+| 并发 | 启用/配置 limiter；查看全局及安全的逐 Key 状态（每 3 秒轮询） |
 
 不重编 `.so` 时开发前端：
 
@@ -162,6 +195,8 @@ VITE_CPA_BASE=http://127.0.0.1:8317 npm run dev
 路径为精确匹配。鉴权：CPA 管理 Bearer。
 
 **Key：** `GET/POST/PATCH/DELETE …/keys`，以及 `rotate` / `reset-rpm` / `usage` / `status`  
+
+**并发：** `GET …/concurrency` 返回 `{config, status}`；`PUT …/concurrency` 校验、持久化并热更新。
 
 **别名：** `GET/POST/DELETE …/aliases`  
 
@@ -213,6 +248,7 @@ curl -X POST "$CPA/v0/management/plugins/cpa-key-policy/aliases" \
 | 认识的 key + 允许的别名 | 鉴权通过 → 路由 → 可选 group 过滤 → 上游 |
 | 不允许的模型名 | 鉴权失败 |
 | 超 RPM / 额度 | 拒绝 |
+| 全局并发已满 | 进入公平队列；只有排队超时或单 Key 队列溢出才返回 429 |
 | 写了 group 但组内无可用凭证 | `auth_not_found` / 不可用（不串档） |
 | 不认识的 key | 插件放弃，CPA 可尝试原生 `api-keys` |
 | 非流式对话响应 | 顶层 `model` 改回别名 |
@@ -244,4 +280,3 @@ curl -X POST "$CPA/v0/management/plugins/cpa-key-policy/aliases" \
 go test ./...
 cd web && npm test && npm run build
 ```
-

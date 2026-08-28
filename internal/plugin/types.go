@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 const (
@@ -17,6 +18,13 @@ const (
 	MethodFrontendAuthAuthenticate = "frontend_auth.authenticate"
 
 	MethodModelRoute = "model.route"
+
+	// Request interception is the verified CLIProxyAPI execution-level hook.
+	// "before" and "after" refer to upstream credential selection, not
+	// frontend authentication.
+	MethodRequestInterceptBefore = "request.intercept_before"
+	MethodRequestInterceptAfter  = "request.intercept_after"
+	MethodRequestComplete        = "request.complete"
 
 	MethodResponseInterceptAfter = "response.intercept_after"
 
@@ -90,6 +98,8 @@ type Capabilities struct {
 	FrontendAuthProviderExclusive bool `json:"frontend_auth_provider_exclusive,omitempty"`
 	ModelRouter                   bool `json:"model_router"`
 	Scheduler                     bool `json:"scheduler,omitempty"`
+	RequestInterceptor            bool `json:"request_interceptor,omitempty"`
+	RequestLifecyclePlugin        bool `json:"request_lifecycle_plugin,omitempty"`
 	ResponseInterceptor           bool `json:"response_interceptor"`
 	UsagePlugin                   bool `json:"usage_plugin"`
 	ManagementAPI                 bool `json:"management_api"`
@@ -130,6 +140,50 @@ type ModelRouteResponse struct {
 	Target      string `json:"Target,omitempty"`
 	TargetModel string `json:"TargetModel,omitempty"`
 	Reason      string `json:"Reason,omitempty"`
+}
+
+// RequestInterceptRequest mirrors pluginapi.RequestInterceptRequest from the
+// current CLIProxyAPI ABI. RequestID correlates this admission with exactly one
+// later request.complete notification.
+type RequestInterceptRequest struct {
+	RequestID      string         `json:"RequestID"`
+	TraceID        string         `json:"TraceID,omitempty"`
+	SourceFormat   string         `json:"SourceFormat,omitempty"`
+	ToFormat       string         `json:"ToFormat,omitempty"`
+	Model          string         `json:"Model,omitempty"`
+	RequestedModel string         `json:"RequestedModel,omitempty"`
+	Stream         bool           `json:"Stream,omitempty"`
+	Headers        http.Header    `json:"Headers,omitempty"`
+	Body           []byte         `json:"Body,omitempty"`
+	Metadata       map[string]any `json:"Metadata,omitempty"`
+}
+
+type RequestInterceptResponse struct {
+	Headers         http.Header `json:"Headers,omitempty"`
+	Body            []byte      `json:"Body,omitempty"`
+	ClearHeaders    []string    `json:"ClearHeaders,omitempty"`
+	Terminate       bool        `json:"Terminate,omitempty"`
+	StatusCode      int         `json:"StatusCode,omitempty"`
+	ResponseHeaders http.Header `json:"ResponseHeaders,omitempty"`
+	ResponseBody    []byte      `json:"ResponseBody,omitempty"`
+}
+
+// RequestCompletion mirrors pluginapi.RequestCompletion. The limiter only
+// needs RequestID, but retaining the complete shape keeps the ABI explicit and
+// makes future diagnostics compatible without exposing request secrets.
+type RequestCompletion struct {
+	RequestID      string         `json:"RequestID"`
+	TraceID        string         `json:"TraceID,omitempty"`
+	SourceFormat   string         `json:"SourceFormat,omitempty"`
+	Model          string         `json:"Model,omitempty"`
+	RequestedModel string         `json:"RequestedModel,omitempty"`
+	Stream         bool           `json:"Stream,omitempty"`
+	Outcome        string         `json:"Outcome,omitempty"`
+	StatusCode     int            `json:"StatusCode,omitempty"`
+	Error          string         `json:"Error,omitempty"`
+	StartedAt      time.Time      `json:"StartedAt,omitempty"`
+	CompletedAt    time.Time      `json:"CompletedAt,omitempty"`
+	Metadata       map[string]any `json:"Metadata,omitempty"`
 }
 
 // SchedulerPickRequest is the payload of the host->plugin scheduler.pick call.

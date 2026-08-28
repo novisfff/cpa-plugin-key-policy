@@ -17,10 +17,10 @@ In plain words: you issue your own `cpa_…` keys to clients. Each key only sees
 
 1. **Issue keys** — create many downstream keys; each has an allow-list of models (or shared aliases).
 2. **Route** — client calls with alias name `fast`; plugin rewrites to e.g. `codex` + `gpt-5.4-mini`.
-3. **Limit** — per-key RPM, optional daily/weekly USD caps, token or per-call billing.
+3. **Limit** — per-key RPM, optional daily/weekly USD caps, token or per-call billing, plus opt-in fair global concurrency.
 4. **Isolate credentials (tiers / groups)** — pin a request to Codex free/team/… or to a **custom classify group** so it never lands on the wrong auth file.
 5. **Multi-target aliases** — one alias can point at several backends (priority or round-robin).
-6. **Web UI** — manage keys, global aliases, and credential classification inside CPA.
+6. **Web UI** — manage keys, mappings, credential classification, concurrency configuration, and runtime status inside CPA.
 
 ---
 
@@ -84,6 +84,7 @@ Channels under CPA `openai-compatibility` (e.g. a named proxy) use the **channel
 | Frontend auth | Know plugin keys; enforce alias allow-list, RPM, budget; stamp route + group metadata |
 | Model router | Alias → provider + target model |
 | Scheduler | When `group` is set, filter auth candidates by tier / `classify:` group |
+| Request interceptor + lifecycle | Fair concurrency acquire before inference; exactly-once release on `request.complete` |
 | Response interceptor | Non-stream JSON: rewrite top-level `model` back to the alias |
 | Usage | Token / per-call billing into the state file |
 | Management API + embedded Web UI | Keys, aliases, classify rules, status |
@@ -122,13 +123,44 @@ plugins:
       enabled: true
       priority: 10
       state_file: "cpa-key-policy-state.json"
+      concurrency:
+        enabled: false
+        global_limit: 6
+        queue_timeout: 60s
+        max_queue_per_key: 32
 ```
 
 Notes:
 
-- If `state_file` exists, it is the source of truth for keys / aliases / classify rules / usage.
+- If `state_file` contains a `concurrency` block, that persisted value wins over YAML. Web UI/API changes are written there. Old state files without the block remain disabled unless YAML explicitly enables it.
+- Concurrency is **disabled by default**, so upgrading does not change existing request behavior.
 - Prefer creating keys and aliases in the **Web UI** or Management API; seed YAML `keys` is mainly for first boot.
 - Never commit real key hashes, management secrets, or live host URLs into public docs.
+
+---
+
+## Dynamic Fair Concurrency Limiter
+
+This optional, process-local limiter caps running inference requests globally while lending all idle capacity to whoever is active. With `global_limit: 6`:
+
+| Active downstream keys | Steady-state allocation while all keep waiting |
+|------------------------|------------------------------------------------|
+| A only | A = 6 |
+| A + B | A ≈ 3, B ≈ 3 |
+| A + B + C | A ≈ 2, B ≈ 2, C ≈ 2 |
+
+Scheduling is non-preemptive. Existing requests are never interrupted when another user arrives or the limit is lowered. Each newly freed slot goes to a waiting principal with the lowest running count; ties use least-recently-granted principal and then oldest per-principal FIFO head. A user with a large queued backlog therefore cannot starve later users, and a lone user can borrow the full limit again as others become idle.
+
+When all slots are busy, requests queue instead of immediately failing:
+
+- `queue_timeout` expiry returns OpenAI-compatible HTTP 429 with code `concurrency_queue_timeout` and `Retry-After: 1`.
+- Exceeding `max_queue_per_key` returns HTTP 429 with code `concurrency_queue_full`.
+- Client cancellation removes a queued request immediately.
+- Disabling the limiter lets queued requests continue without counting; already counted requests drain naturally.
+
+The limiter runs at CPA's inference execution hook, so Management API, health/static resources, login/config and usage queries do not enter it. Identity uses CPA's irreversible authenticated `caller_scope` first, with a transient downstream-key lookup fallback. Runtime status exposes only key ID/name/masked preview—never a plaintext key or authorization header.
+
+Lifecycle coverage in the inspected current CLIProxyAPI includes normal HTTP, streaming EOF/error, cancellation/disconnect and WebSocket-backed model executions through `request.complete`. A slot represents one host request execution (not an independently distributed quota or per-message WebSocket counter). This limiter is in-memory per CPA process; it does not coordinate multiple CPA instances. A future host transport that does not emit the advertised lifecycle completion cannot be observed by a plugin, so use a CLIProxyAPI version providing both `request_interceptor` and `request_lifecycle_plugin`.
 
 ---
 
@@ -150,6 +182,7 @@ UI areas:
 | Mapping → Aliases | Global multi-target aliases, dispatch, pricing |
 | Mapping → Classification | Custom credential groups + match preview |
 | Model picker | Catalog of providers; tier / **Custom · …** subgroups |
+| Concurrency | Enable/configure the limiter; view running, waiting and safe per-key status (3-second polling) |
 
 Dev UI without rebuilding the `.so`:
 
@@ -172,6 +205,11 @@ Exact paths (no path templates). Auth: CPA management bearer token.
 - `POST …/keys/reset-rpm?id=…`
 - `GET …/keys/usage?id=…`
 - `GET …/status`
+
+**Concurrency**
+
+- `GET …/concurrency` — `{config, status}` with global and safe per-key runtime counters
+- `PUT …/concurrency` — validate, persist and hot-reconfigure the complete config
 
 **Aliases**
 
@@ -226,6 +264,7 @@ curl -X POST "$CPA/v0/management/plugins/cpa-key-policy/aliases" \
 | Known key + allowed alias | Auth OK → route → optional group filter → upstream |
 | Known key + unknown model | Auth rejected |
 | RPM / budget exceeded | Rejected |
+| Concurrency full | Fair queue; 429 only on timeout or per-key queue overflow |
 | Group set, no matching auth file | `auth_not_found` / unavailable (no cross-tier leak) |
 | Unknown key | Plugin declines; CPA may try native `api-keys` |
 | Non-stream chat response | Top-level `model` rewritten to alias |
@@ -257,4 +296,3 @@ Per-key `allow_models_endpoint`: **binary** — deny (401) or full global list. 
 go test ./...
 cd web && npm test && npm run build
 ```
-

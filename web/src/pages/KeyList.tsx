@@ -278,13 +278,13 @@ export function MobileTabBar({
   showUsage = false,
   usagePath = "/keys",
 }: {
-  active: "keys" | "usage" | "new";
+  active: "keys" | "usage" | "new" | "concurrency";
   showUsage?: boolean;
   usagePath?: string;
 }) {
   const t = useT();
   const nav = useNavigate();
-  const tab = (id: "keys" | "usage" | "new", label: string, icon: string, target: string) => (
+  const tab = (id: "keys" | "usage" | "new" | "concurrency", label: string, icon: string, target: string) => (
     <button
       className={"tab" + (active === id ? " active" : "")}
       onClick={() => nav(target)}
@@ -297,6 +297,7 @@ export function MobileTabBar({
     <nav className={"tabbar" + (showUsage ? "" : " tabbar--no-usage")}>
       {tab("keys", t("keys.mobile.tabKeys"), "#", "/keys")}
       {showUsage && tab("usage", t("keys.mobile.tabUsage"), "#", usagePath)}
+      {tab("concurrency", t("keys.mobile.tabConcurrency"), "≋", "/concurrency")}
       {tab("new", t("keys.mobile.tabNew"), "+", "/keys/new")}
     </nav>
   );

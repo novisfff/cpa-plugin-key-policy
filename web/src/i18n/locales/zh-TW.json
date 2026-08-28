@@ -3,7 +3,9 @@
     "title": "cpa-key-policy 管理面板",
     "keyList": "Key 列表",
     "newKey": "新建 Key",
-    "logout": "登出"
+    "logout": "登出",
+    "mapping": "映射",
+    "concurrency": "並發"
   },
   "login": {
     "subTitle": "登入 CLIProxyAPI",
@@ -55,6 +57,7 @@
       "modelsSuffix": "個模型",
       "tabKeys": "密鑰",
       "tabUsage": "用量",
+      "tabConcurrency": "並發",
       "tabNew": "新建",
       "callCount": "{{n}} 次呼叫",
       "noLimit": "不限"
@@ -190,5 +193,33 @@
       "tokenMix": "Token 構成",
       "last7Days": "最近 7 天"
     }
+  },
+  "concurrency": {
+    "title": "並發限流器",
+    "subtitle": "在活躍下游 Key 之間動態、公平地共享全域推理並發。",
+    "enabled": "已啟用",
+    "disabled": "未啟用",
+    "loading": "正在載入並發設定…",
+    "loadFailed": "載入並發設定失敗",
+    "saveFailed": "儲存並發設定失敗",
+    "saved": "並發設定已儲存。",
+    "configTitle": "設定",
+    "enableLabel": "啟用動態公平並發",
+    "enableHint": "預設關閉，升級後不會改變原有行為。",
+    "globalLimit": "全域並發",
+    "globalLimitHint": "所有受管 Key 合計最多同時執行的推理請求數。",
+    "queueTimeout": "佇列逾時",
+    "queueTimeoutHint": "排隊請求最多等待多久後回傳 HTTP 429，例如 60s。",
+    "maxQueue": "每個 Key 最大佇列",
+    "maxQueueHint": "限制單一 Key 的積壓請求數，避免記憶體無限增長。",
+    "save": "儲存設定",
+    "saving": "儲存中…",
+    "runtimeTitle": "執行狀態",
+    "running": "執行中",
+    "waiting": "等待中",
+    "activeUsers": "活躍使用者",
+    "keyPrincipal": "Key / Principal",
+    "noActiveUsers": "目前沒有執行中或排隊的使用者。",
+    "pollingHint": "執行狀態每 3 秒更新。已經執行的請求不會被搶佔。"
   }
 }

@@ -4,6 +4,7 @@
     "keyList": "Key 列表",
     "newKey": "新建 Key",
     "mapping": "映射",
+    "concurrency": "并发",
     "logout": "退出"
   },
   "login": {
@@ -56,6 +57,7 @@
       "modelsSuffix": "个模型",
       "tabKeys": "密钥",
       "tabUsage": "用量",
+      "tabConcurrency": "并发",
       "tabNew": "新建",
       "callCount": "{{n}} 次调用",
       "noLimit": "不限"
@@ -199,6 +201,34 @@
       "tokenMix": "Token 构成",
       "last7Days": "最近 7 天"
     }
+  },
+  "concurrency": {
+    "title": "并发限流器",
+    "subtitle": "在活跃下游 Key 之间动态、公平地共享全局推理并发。",
+    "enabled": "已启用",
+    "disabled": "未启用",
+    "loading": "正在加载并发配置…",
+    "loadFailed": "加载并发配置失败",
+    "saveFailed": "保存并发配置失败",
+    "saved": "并发配置已保存。",
+    "configTitle": "配置",
+    "enableLabel": "启用动态公平并发",
+    "enableHint": "默认关闭，升级后不会改变原有行为。",
+    "globalLimit": "全局并发",
+    "globalLimitHint": "所有受管 Key 合计最多同时运行的推理请求数。",
+    "queueTimeout": "排队超时",
+    "queueTimeoutHint": "排队请求最多等待多久后返回 HTTP 429，例如 60s。",
+    "maxQueue": "每个 Key 最大队列",
+    "maxQueueHint": "限制单个 Key 的积压请求数，避免内存无限增长。",
+    "save": "保存设置",
+    "saving": "保存中…",
+    "runtimeTitle": "运行状态",
+    "running": "运行中",
+    "waiting": "等待中",
+    "activeUsers": "活跃用户",
+    "keyPrincipal": "Key / Principal",
+    "noActiveUsers": "当前没有运行中或排队的用户。",
+    "pollingHint": "运行状态每 3 秒刷新。已经运行的请求不会被抢占。"
   },
   "mapping": {
     "title": "映射管理",
