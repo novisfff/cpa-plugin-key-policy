@@ -142,6 +142,36 @@ export interface StatusResponse {
   rpm_usage?: Record<string, unknown>;
 }
 
+export interface ConcurrencyConfig {
+  enabled: boolean;
+  global_limit: number;
+  queue_timeout: string;
+  max_queue_per_key: number;
+}
+
+export interface ConcurrencyPrincipalStatus {
+  principal: string;
+  key_id: string;
+  key_name?: string;
+  key_preview?: string;
+  running: number;
+  waiting: number;
+}
+
+export interface ConcurrencyRuntimeStatus {
+  enabled: boolean;
+  global_limit: number;
+  global_running: number;
+  total_waiting: number;
+  active_principals: number;
+  principals: ConcurrencyPrincipalStatus[];
+}
+
+export interface ConcurrencyPayload {
+  config: ConcurrencyConfig;
+  status: ConcurrencyRuntimeStatus;
+}
+
 // --- Advanced Mapping types ---
 
 // AliasTarget is one selectable destination for an alias.

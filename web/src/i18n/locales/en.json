@@ -4,7 +4,8 @@
     "keyList": "Keys",
     "newKey": "New Key",
     "logout": "Log out",
-    "mapping": "Mapping"
+    "mapping": "Mapping",
+    "concurrency": "Concurrency"
   },
   "login": {
     "subTitle": "Sign in to CLIProxyAPI",
@@ -56,6 +57,7 @@
       "modelsSuffix": "models",
       "tabKeys": "Keys",
       "tabUsage": "Usage",
+      "tabConcurrency": "Concurrency",
       "tabNew": "New",
       "callCount": "{{n}} calls",
       "noLimit": "unlimited"
@@ -199,6 +201,34 @@
       "tokenMix": "Token mix",
       "last7Days": "Last 7 days"
     }
+  },
+  "concurrency": {
+    "title": "Concurrency Limiter",
+    "subtitle": "Share global inference capacity dynamically and fairly across active downstream keys.",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "loading": "Loading concurrency settings…",
+    "loadFailed": "Failed to load concurrency settings",
+    "saveFailed": "Failed to save concurrency settings",
+    "saved": "Concurrency settings saved.",
+    "configTitle": "Configuration",
+    "enableLabel": "Enable Dynamic Fair Concurrency",
+    "enableHint": "Disabled by default for backward compatibility.",
+    "globalLimit": "Global Concurrency",
+    "globalLimitHint": "Maximum inference requests running across all managed keys.",
+    "queueTimeout": "Queue Timeout",
+    "queueTimeoutHint": "Maximum wait before a queued request receives HTTP 429, for example 60s.",
+    "maxQueue": "Max Queue / Key",
+    "maxQueueHint": "Bounds queued requests per key to protect memory.",
+    "save": "Save settings",
+    "saving": "Saving…",
+    "runtimeTitle": "Runtime Status",
+    "running": "Running",
+    "waiting": "Waiting",
+    "activeUsers": "Active Users",
+    "keyPrincipal": "Key / Principal",
+    "noActiveUsers": "No active or queued users.",
+    "pollingHint": "Runtime status refreshes every 3 seconds. Running requests are never preempted."
   },
   "mapping": {
     "title": "Mapping",

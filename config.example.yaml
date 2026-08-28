@@ -11,6 +11,15 @@ plugins:
       # Runtime source of truth once created (keys, aliases, classify rules, usage).
       state_file: "cpa-key-policy-state.json"
 
+      # Optional process-local dynamic fair concurrency limiter. It is disabled
+      # by default; enable it here on first boot or in the Web UI. After the
+      # state file contains this block, the persisted value wins over YAML.
+      concurrency:
+        enabled: false
+        global_limit: 6
+        queue_timeout: 60s
+        max_queue_per_key: 32
+
       # Prefer creating keys/aliases/classify rules via Web UI or Management API.
       # Seed keys below are mainly for first boot when state_file does not exist.
       keys:

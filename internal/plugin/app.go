@@ -9,22 +9,33 @@ import (
 	"strings"
 	"sync"
 
+	fairconcurrency "cpa-key-policy/internal/concurrency"
 	"cpa-key-policy/internal/plugin/web"
 	"cpa-key-policy/internal/policy"
 )
 
 type App struct {
-	store         *policy.Store
-	classifyMu    sync.RWMutex
-	classifyCache map[string][]string
+	store                *policy.Store
+	classifyMu           sync.RWMutex
+	classifyCache        map[string][]string
+	concurrencyLimiter   *fairconcurrency.Limiter
+	concurrencyRequestMu sync.Mutex
+	concurrencyRequests  map[string]*trackedConcurrencyRequest
+	concurrencyCompleted map[string]struct{}
+	concurrencyOrder     []string
 }
 
 const classifyCacheCapacity = 4096
 
 func NewApp() *App {
 	store := policy.NewStore()
-	_ = store.Configure(policy.DefaultConfig())
-	return &App{store: store, classifyCache: make(map[string][]string)}
+	return &App{
+		store:                store,
+		classifyCache:        make(map[string][]string),
+		concurrencyLimiter:   newConcurrencyLimiter(policy.DefaultConcurrencyConfig()),
+		concurrencyRequests:  make(map[string]*trackedConcurrencyRequest),
+		concurrencyCompleted: make(map[string]struct{}),
+	}
 }
 
 func (a *App) HandleMethod(method string, request []byte) ([]byte, error) {
@@ -46,6 +57,12 @@ func (a *App) handleMethod(method string, request []byte) ([]byte, error) {
 		return a.authenticate(request)
 	case MethodModelRoute:
 		return a.routeModel(request)
+	case MethodRequestInterceptBefore:
+		return a.interceptConcurrency(request)
+	case MethodRequestInterceptAfter:
+		return OKEnvelope(RequestInterceptResponse{})
+	case MethodRequestComplete:
+		return a.completeConcurrency(request)
 	case MethodSchedulerPick:
 		return a.pickScheduler(request)
 	case MethodResponseInterceptAfter:
@@ -85,6 +102,9 @@ func (a *App) configure(raw []byte) error {
 	if err := a.store.Configure(cfg); err != nil {
 		return err
 	}
+	if err := a.reconfigureConcurrency(a.store.ConcurrencyConfig()); err != nil {
+		return err
+	}
 	// Register the classify cache clear callback, then clear once for safety.
 	a.store.SetOnClassifyRulesChanged(func() {
 		a.clearClassifyCache()
@@ -96,6 +116,7 @@ func (a *App) configure(raw []byte) error {
 
 // Shutdown flushes usage. Host calls this on plugin unload.
 func (a *App) Shutdown() {
+	a.cancelAllConcurrencyRequests()
 	a.store.StopUsageFlusher()
 }
 
@@ -111,6 +132,7 @@ func (a *App) registration() Registration {
 				{Name: "enabled", Type: "boolean", Description: "Enable or disable this plugin without unloading it."},
 				{Name: "state_file", Type: "string", Description: "JSON state file used for key policy changes made through the Management API."},
 				{Name: "keys", Type: "array", Description: "Initial downstream key policy list. State file wins after it exists."},
+				{Name: "concurrency", Type: "object", Description: "Optional dynamic fair global concurrency limiter; disabled by default."},
 			},
 		},
 		Capabilities: Capabilities{
@@ -118,6 +140,8 @@ func (a *App) registration() Registration {
 			FrontendAuthProviderExclusive: false,
 			ModelRouter:                   true,
 			Scheduler:                     true,
+			RequestInterceptor:            true,
+			RequestLifecyclePlugin:        true,
 			ResponseInterceptor:           true,
 			UsagePlugin:                   true,
 			ManagementAPI:                 true,
@@ -487,6 +511,8 @@ func (a *App) managementRegistration() ManagementRegistrationResponse {
 			{Method: http.MethodPost, Path: base + "/keys/reset-rpm", Description: "Reset one downstream CPA key RPM counter by id."},
 			{Method: http.MethodGet, Path: base + "/keys/usage", Description: "Per-alias usage breakdown for one downstream CPA key by id."},
 			{Method: http.MethodGet, Path: base + "/status", Description: "Show cpa-key-policy runtime status."},
+			{Method: http.MethodGet, Path: base + "/concurrency", Description: "Show dynamic fair concurrency configuration and runtime status."},
+			{Method: http.MethodPut, Path: base + "/concurrency", Description: "Update dynamic fair concurrency configuration."},
 			{Method: http.MethodGet, Path: base + "/aliases", Description: "List the global alias mapping table."},
 			{Method: http.MethodPost, Path: base + "/aliases", Description: "Create or update a global alias mapping."},
 			{Method: http.MethodDelete, Path: base + "/aliases", Description: "Delete a global alias mapping by name."},
@@ -535,7 +561,13 @@ func (a *App) handleManagement(raw []byte) ([]byte, error) {
 	case req.Method == http.MethodGet && path == base+"/keys/usage":
 		return OKEnvelope(a.keyUsage(idFromRequest(req.Query, req.Body)))
 	case req.Method == http.MethodGet && path == base+"/status":
-		return OKEnvelope(jsonResponse(http.StatusOK, a.store.Status()))
+		status := a.store.Status()
+		status["concurrency_runtime"] = a.concurrencyRuntimeStatus()
+		return OKEnvelope(jsonResponse(http.StatusOK, status))
+	case req.Method == http.MethodGet && path == base+"/concurrency":
+		return OKEnvelope(jsonResponse(http.StatusOK, a.concurrencyManagementPayload()))
+	case req.Method == http.MethodPut && path == base+"/concurrency":
+		return OKEnvelope(a.updateConcurrency(req.Body))
 	case req.Method == http.MethodGet && path == base+"/aliases":
 		return OKEnvelope(jsonResponse(http.StatusOK, map[string]any{"aliases": a.store.AliasesSnapshot()}))
 	case req.Method == http.MethodPost && path == base+"/aliases":

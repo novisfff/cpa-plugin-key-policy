@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,9 +16,10 @@ import (
 )
 
 type Config struct {
-	Enabled   bool        `yaml:"enabled" json:"enabled"`
-	StateFile string      `yaml:"state_file" json:"state_file"`
-	Keys      []KeyConfig `yaml:"keys" json:"keys"`
+	Enabled     bool              `yaml:"enabled" json:"enabled"`
+	StateFile   string            `yaml:"state_file" json:"state_file"`
+	Keys        []KeyConfig       `yaml:"keys" json:"keys"`
+	Concurrency ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
 	// Aliases is the global alias mapping table. Each entry maps a downstream
 	// alias name to one or more (provider, model, group) targets with a shared
 	// pricing config. Keys reference aliases by name via KeyAliasRef.
@@ -26,6 +28,89 @@ type Config struct {
 	// BEFORE the built-in plan_type/tier detection and can override it. Built-in
 	// rules (always present, read-only) handle unrecognized credentials.
 	ClassifyRules []ClassifyRule `yaml:"classify_rules,omitempty" json:"classify_rules,omitempty"`
+}
+
+// Duration is a time.Duration that remains human-readable in YAML, state JSON,
+// and Management API payloads (for example "60s" instead of nanoseconds).
+type Duration time.Duration
+
+func (d Duration) String() string {
+	return time.Duration(d).String()
+}
+
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.String())
+}
+
+func (d *Duration) UnmarshalJSON(raw []byte) error {
+	if d == nil {
+		return errors.New("duration target is nil")
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		parsed, errParse := parseDuration(text)
+		if errParse != nil {
+			return errParse
+		}
+		*d = Duration(parsed)
+		return nil
+	}
+	var seconds float64
+	if err := json.Unmarshal(raw, &seconds); err != nil {
+		return fmt.Errorf("duration must be a string such as 60s or a number of seconds")
+	}
+	*d = Duration(seconds * float64(time.Second))
+	return nil
+}
+
+func (d Duration) MarshalYAML() (any, error) {
+	return d.String(), nil
+}
+
+func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
+	if d == nil {
+		return errors.New("duration target is nil")
+	}
+	if node == nil {
+		return errors.New("duration value is required")
+	}
+	parsed, err := parseDuration(node.Value)
+	if err != nil {
+		return err
+	}
+	*d = Duration(parsed)
+	return nil
+}
+
+func parseDuration(value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, errors.New("duration is required")
+	}
+	if seconds, err := strconv.ParseFloat(value, 64); err == nil {
+		return time.Duration(seconds * float64(time.Second)), nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q: %w", value, err)
+	}
+	return parsed, nil
+}
+
+type ConcurrencyConfig struct {
+	Enabled        bool     `yaml:"enabled" json:"enabled"`
+	GlobalLimit    int      `yaml:"global_limit" json:"global_limit"`
+	QueueTimeout   Duration `yaml:"queue_timeout" json:"queue_timeout"`
+	MaxQueuePerKey int      `yaml:"max_queue_per_key" json:"max_queue_per_key"`
+}
+
+func DefaultConcurrencyConfig() ConcurrencyConfig {
+	return ConcurrencyConfig{
+		Enabled:        false,
+		GlobalLimit:    6,
+		QueueTimeout:   Duration(60 * time.Second),
+		MaxQueuePerKey: 32,
+	}
 }
 
 type KeyConfig struct {
@@ -279,12 +364,16 @@ type State struct {
 	// fallback for the state-only reload path (e.g. FlushUsage recovery).
 	Aliases       []AliasMapping `json:"aliases,omitempty"`
 	ClassifyRules []ClassifyRule `json:"classify_rules,omitempty"`
+	// Concurrency is a pointer so old state files with no field can be
+	// distinguished from a deliberately persisted disabled configuration.
+	Concurrency *ConcurrencyConfig `json:"concurrency,omitempty"`
 }
 
 func DefaultConfig() Config {
 	return Config{
-		Enabled:   true,
-		StateFile: "cpa-key-policy-state.json",
+		Enabled:     true,
+		StateFile:   "cpa-key-policy-state.json",
+		Concurrency: DefaultConcurrencyConfig(),
 	}
 }
 
@@ -423,6 +512,9 @@ func mergeAliasTarget(a *AliasMapping, target AliasTarget) {
 }
 
 func normalizeConfig(cfg *Config) error {
+	if err := normalizeConcurrencyConfig(&cfg.Concurrency); err != nil {
+		return err
+	}
 	// Auto-migrate: when a key has per-key Models but no Aliases, promote
 	// Models to the global alias table and convert the key to reference aliases.
 	// This runs on every normalizeConfig call (DecodeConfig, Configure, state
@@ -625,6 +717,34 @@ func normalizeConfig(cfg *Config) error {
 	return nil
 }
 
+func normalizeConcurrencyConfig(config *ConcurrencyConfig) error {
+	if config == nil {
+		return errors.New("concurrency config is required")
+	}
+	if *config == (ConcurrencyConfig{}) {
+		*config = DefaultConcurrencyConfig()
+		return nil
+	}
+	if config.GlobalLimit <= 0 {
+		return errors.New("concurrency.global_limit must be positive")
+	}
+	if time.Duration(config.QueueTimeout) <= 0 {
+		return errors.New("concurrency.queue_timeout must be positive")
+	}
+	if config.MaxQueuePerKey <= 0 {
+		return errors.New("concurrency.max_queue_per_key must be positive")
+	}
+	return nil
+}
+
+// ValidateConcurrencyConfig applies the same validation/defaulting rules used
+// by DecodeConfig and Store updates without mutating the caller's value. It is
+// used by the Management API to distinguish a bad request from a persistence
+// failure.
+func ValidateConcurrencyConfig(config ConcurrencyConfig) error {
+	return normalizeConcurrencyConfig(&config)
+}
+
 func ResolveStatePath(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -659,7 +779,14 @@ func LoadState(path string) (*State, error) {
 }
 
 // SaveState atomically writes the key list plus usage ledger to the state file.
+// It retains the legacy signature used by callers that do not manage the
+// concurrency block directly.
 func SaveState(path string, keys []KeyConfig, usage map[string]*UsageState, aliases []AliasMapping, rules []ClassifyRule) error {
+	return SaveStateWithConcurrency(path, keys, usage, aliases, rules, DefaultConcurrencyConfig())
+}
+
+// SaveStateWithConcurrency writes the complete plugin-managed state.
+func SaveStateWithConcurrency(path string, keys []KeyConfig, usage map[string]*UsageState, aliases []AliasMapping, rules []ClassifyRule, concurrency ConcurrencyConfig) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -675,7 +802,8 @@ func SaveState(path string, keys []KeyConfig, usage map[string]*UsageState, alia
 		cleanKeys[i] = keys[i]
 		cleanKeys[i].Models = nil
 	}
-	state := State{Version: 1, Keys: cleanKeys, Usage: usage, UpdatedAt: time.Now().UTC(), Aliases: aliases, ClassifyRules: rules}
+	concurrencyCopy := concurrency
+	state := State{Version: 1, Keys: cleanKeys, Usage: usage, UpdatedAt: time.Now().UTC(), Aliases: aliases, ClassifyRules: rules, Concurrency: &concurrencyCopy}
 	raw, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
@@ -699,10 +827,12 @@ func SaveUsageOnly(path string, usage map[string]*UsageState) error {
 	var keys []KeyConfig
 	var aliases []AliasMapping
 	var rules []ClassifyRule
+	var concurrency *ConcurrencyConfig
 	if cur, err := LoadState(path); err == nil {
 		keys = cur.Keys
 		aliases = cur.Aliases
 		rules = cur.ClassifyRules
+		concurrency = cur.Concurrency
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -712,7 +842,7 @@ func SaveUsageOnly(path string, usage map[string]*UsageState) error {
 	for i := range keys {
 		keys[i].Models = nil
 	}
-	state := State{Version: 1, Keys: keys, Usage: usage, UpdatedAt: time.Now().UTC(), Aliases: aliases, ClassifyRules: rules}
+	state := State{Version: 1, Keys: keys, Usage: usage, UpdatedAt: time.Now().UTC(), Aliases: aliases, ClassifyRules: rules, Concurrency: concurrency}
 	raw, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
