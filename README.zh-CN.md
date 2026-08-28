@@ -2,7 +2,7 @@
 
 面向 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 的**下游 API Key 策略插件**。
 
-用人话说：你可以给客户发自己的 `cpa_…` 钥匙。每把钥匙只能用你允许的模型，还能限速、限额，并转到 CPA 真实上游（Codex、Claude、openai-compatibility 通道等）。CPA 自带的 `api-keys` 仍可留给管理员；**不要把插件下发的 key 再写进 `api-keys`**，否则会绕过本插件策略。
+用人话说：插件可以直接复用 CPA 顶层 `api-keys` 中已有的 Key，不再要求另发一套 `cpa_…` 钥匙。每个 CPA Key 都能绑定模型、限速、限额和路由策略；`cpa-native` 模式会独占前端鉴权，未绑定或策略拒绝的 Key 不会回落绕过。旧的插件自发 Key 模式仍保留用于兼容升级。
 
 | | |
 |---|---|
@@ -15,20 +15,23 @@
 
 ## 它能干什么
 
-1. **发钥匙** — 批量创建下游 key，每把绑定可用模型 / 别名。  
-2. **做映射** — 客户端写 `model: fast`，插件转到例如 `codex` + `gpt-5.4-mini`。  
+1. **复用 CPA Key** — 从 CPA 已有 `api-keys` 中选择并绑定策略，不生成新 Key。
+2. **做映射** — 客户端写 `model: fast`，插件转到例如 `codex` + `gpt-5.4-mini`。
 3. **做限制** — 单 key 的 RPM、可选每日/每周美元额度，按 token 或按次计费，以及可选的公平全局并发。
-4. **凭证分档 / 归类** — 请求可以钉死在 Codex free/team 等内置档，或你自定义的归类组，**不会串到别的凭证文件**。  
-5. **多目标别名** — 一个别名挂多个后端（优先 或 轮询）。  
+4. **凭证分档 / 归类** — 请求可以钉死在 Codex free/team 等内置档，或你自定义的归类组，**不会串到别的凭证文件**。
+5. **多目标别名** — 一个别名挂多个后端（优先 或 轮询）。
 6. **网页管理** — 在 CPA 里管 key、映射、凭证归类、并发配置与运行状态。
 
 ---
 
 ## 核心概念
 
-### 下游 Key
+### 下游 Key 与鉴权模式
 
-插件自己发的密钥（`cpa_…`），只由本插件鉴权。上面可以配置：
+- `auth_mode: cpa-native`（推荐）：直接绑定 CPA 顶层 `api-keys`；插件只保存 SHA-256、掩码和策略，不保存明文、不生成 Key。插件独占鉴权，未绑定 Key 一律拒绝。
+- `auth_mode: plugin`（兼容默认）：保留旧版插件自发 `cpa_…` Key 的行为。升级后必须先在此模式下绑定好全部原生 Key，再切换模式。
+
+每个绑定上可以配置：
 
 - 允许的 **模型** 和/或 **别名**
 - RPM
@@ -120,6 +123,7 @@ plugins:
     cpa-key-policy:
       enabled: true
       priority: 10
+      auth_mode: plugin # 先绑定全部 CPA Key，再切换为 cpa-native
       state_file: "cpa-key-policy-state.json"
       concurrency:
         enabled: false
@@ -131,6 +135,9 @@ plugins:
 说明：
 
 - 若 `state_file` 已有 `concurrency` 字段，则持久化配置优先于 YAML；网页/API 修改会写回这里。旧 state 没有该字段时仍默认关闭，除非 YAML 明确启用。
+- 缺省 `auth_mode` 为 `plugin`，用于安全兼容旧部署。建议切换 `cpa-native` 前绑定好全部 Key；若零绑定切换，插件仍会独占鉴权并拒绝所有推理请求（管理 API 仍可补绑），不会因加载失败而回落绕过。
+- CPA 顶层 `api-keys` 必须继续保留；它们是 CPA Usage Keeper 同步 Key 元数据的来源。插件鉴权成功时传递原始 CPA Key，因此 Keeper 仍按原有 Key 统计，无需改造。
+- CPA 当前插件 ABI 不会把顶层 Key 列表传给插件。以后从 CPA 删除/轮换 Key 时，也要在插件页面同步删除旧绑定并绑定新值；页面会标记已从 CPA 列表移除的绑定。
 - 并发 limiter **默认关闭**，升级不会改变原有请求行为。
 - 日常请用**网页**或管理 API 建 key 和别名；YAML 种子数据主要用于首次启动。
 - 公开文档里不要写真实管理密钥、主机名或凭证内容。
@@ -174,7 +181,7 @@ http://<你的-cpa-主机>:<api端口>/v0/resource/plugins/cpa-key-policy/index.
 
 | 区域 | 用途 |
 |------|------|
-| Keys | 创建/编辑/轮换/删除 key；绑模型或别名；RPM 与额度 |
+| Keys | 从 CPA `api-keys` 绑定/编辑/删除策略；绑模型或别名；RPM 与额度 |
 | 映射 → 别名 | 全局多目标别名、调度方式、定价 |
 | 映射 → 凭证归类 | 自定义分组规则与命中预览 |
 | 选模型 | 提供商目录；内置档 / **自定义 · …** 子组 |
@@ -194,26 +201,27 @@ VITE_CPA_BASE=http://127.0.0.1:8317 npm run dev
 
 路径为精确匹配。鉴权：CPA 管理 Bearer。
 
-**Key：** `GET/POST/PATCH/DELETE …/keys`，以及 `rotate` / `reset-rpm` / `usage` / `status`  
+**Key：** `GET/PATCH/DELETE …/keys`，`POST …/native-keys/bind`，以及 `reset-rpm` / `usage` / `status`。旧 `plugin` 模式仍支持创建与轮换。
 
 **并发：** `GET …/concurrency` 返回 `{config, status}`；`PUT …/concurrency` 校验、持久化并热更新。
 
-**别名：** `GET/POST/DELETE …/aliases`  
+**别名：** `GET/POST/DELETE …/aliases`
 
-**归类：**  
+**归类：**
 
-- `…/classify-rules`（含 reorder）  
-- `POST …/classify-preview` — 预览组 → 凭证 id（组名为规则裸名）  
-- `POST …/catalog` — 前端提交 auth-file + 模型列表，返回带 `classify:` 的选择器条目  
+- `…/classify-rules`（含 reorder）
+- `POST …/classify-preview` — 预览组 → 凭证 id（组名为规则裸名）
+- `POST …/catalog` — 前端提交 auth-file + 模型列表，返回带 `classify:` 的选择器条目
 
-创建 key（`plain_key` **只返回一次**）：
+绑定 CPA 已有 Key（明文只在本次管理请求中传递，插件 state 不保存）：
 
 ```bash
-curl -X POST "$CPA/v0/management/plugins/cpa-key-policy/keys" \
+curl -X POST "$CPA/v0/management/plugins/cpa-key-policy/native-keys/bind" \
   -H "Authorization: Bearer $MANAGEMENT_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "id": "team-a",
+    "key": "'$CPA_API_KEY'",
+    "id": "team-a-policy",
     "name": "Team A",
     "rpm": 60,
     "models": [
@@ -250,7 +258,8 @@ curl -X POST "$CPA/v0/management/plugins/cpa-key-policy/aliases" \
 | 超 RPM / 额度 | 拒绝 |
 | 全局并发已满 | 进入公平队列；只有排队超时或单 Key 队列溢出才返回 429 |
 | 写了 group 但组内无可用凭证 | `auth_not_found` / 不可用（不串档） |
-| 不认识的 key | 插件放弃，CPA 可尝试原生 `api-keys` |
+| `cpa-native` 下未绑定/禁用/策略拒绝 | 鉴权失败；独占 provider 阻止回落到 CPA 原生鉴权 |
+| `plugin` 下不认识的 key | 插件放弃，CPA 可尝试其它鉴权 provider（旧版兼容行为） |
 | 非流式对话响应 | 顶层 `model` 改回别名 |
 | 流式 | v1 不改写 body |
 
@@ -263,13 +272,13 @@ curl -X POST "$CPA/v0/management/plugins/cpa-key-policy/aliases" \
 
 ## 上手清单
 
-1. 编译/安装 `.so` 到 CPA `plugins.dir`。  
-2. 启用 `plugins` 与 `cpa-key-policy`，配置 `state_file`。  
-3. 用管理密钥打开网页 UI。  
-4. （可选）配置**凭证归类**规则。  
-5. 建**别名**（多目标/定价）和/或给 key 勾选模型（含档位或「自定义 · …」）。  
-6. 创建 key，保存一次性 `plain_key`，发给客户。  
-7. 客户：OpenAI 兼容 base URL = CPA；`Bearer cpa_…`；`model` = 别名。  
+1. 编译/安装 `.so` 到 CPA `plugins.dir`。
+2. 启用 `plugins` 与 `cpa-key-policy`，配置 `state_file`。
+3. 用管理密钥打开网页 UI。
+4. （可选）配置**凭证归类**规则。
+5. 保持 `auth_mode: plugin`，从 CPA 已有 `api-keys` 逐个绑定策略并勾选模型。
+6. 确认全部 Key 已绑定且启用，再把 `auth_mode` 切为 `cpa-native` 并重启/重载 CPA。
+7. 客户继续使用原来的 CPA Key：OpenAI 兼容 base URL = CPA；`Bearer <原 CPA Key>`；`model` = 别名。
 8. openai-compat 通道务必声明 models，否则会「无 auth」。
 
 ---

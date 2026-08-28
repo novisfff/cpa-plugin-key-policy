@@ -2,7 +2,7 @@
 
 Downstream **API key policy** plugin for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI).
 
-In plain words: you issue your own `cpa_…` keys to clients. Each key only sees the models you allow, can be rate-limited and budget-limited, and is routed to real CPA upstream providers (Codex, Claude, OpenAI-compat channels, etc.). CPA’s own `api-keys` can still exist for admin use — **do not put plugin-issued keys into `api-keys`**, or you bypass this plugin.
+In plain words: the plugin can bind policies directly to the keys already present in CPA's top-level `api-keys` list, without issuing another set of `cpa_...` secrets. In `cpa-native` mode it becomes the exclusive frontend auth provider, so an unbound or policy-denied key cannot fall through and bypass the policy. Legacy plugin-owned keys remain available for compatible upgrades.
 
 | | |
 |---|---|
@@ -15,7 +15,7 @@ In plain words: you issue your own `cpa_…` keys to clients. Each key only sees
 
 ## What it does (human version)
 
-1. **Issue keys** — create many downstream keys; each has an allow-list of models (or shared aliases).
+1. **Reuse CPA keys** — select existing top-level `api-keys` and bind model/alias policies without generating new secrets.
 2. **Route** — client calls with alias name `fast`; plugin rewrites to e.g. `codex` + `gpt-5.4-mini`.
 3. **Limit** — per-key RPM, optional daily/weekly USD caps, token or per-call billing, plus opt-in fair global concurrency.
 4. **Isolate credentials (tiers / groups)** — pin a request to Codex free/team/… or to a **custom classify group** so it never lands on the wrong auth file.
@@ -26,9 +26,12 @@ In plain words: you issue your own `cpa_…` keys to clients. Each key only sees
 
 ## Concepts
 
-### Downstream key
+### Downstream keys and auth modes
 
-A plugin-owned secret (`cpa_…`). Authenticated only by this plugin. Holds:
+- `auth_mode: cpa-native` (recommended): bind CPA's existing top-level `api-keys`. The plugin stores only SHA-256, a masked preview, and policy data. It generates and persists no plaintext key. Unbound keys are denied by exclusive authentication.
+- `auth_mode: plugin` (compatibility default): retain the legacy plugin-issued `cpa_...` flow. Stage every native binding in this mode before switching.
+
+Each binding holds:
 
 - allowed **models** and/or **aliases**
 - RPM
@@ -122,6 +125,7 @@ plugins:
     cpa-key-policy:
       enabled: true
       priority: 10
+      auth_mode: plugin # bind every CPA key first, then switch to cpa-native
       state_file: "cpa-key-policy-state.json"
       concurrency:
         enabled: false
@@ -133,6 +137,9 @@ plugins:
 Notes:
 
 - If `state_file` contains a `concurrency` block, that persisted value wins over YAML. Web UI/API changes are written there. Old state files without the block remain disabled unless YAML explicitly enables it.
+- Missing `auth_mode` defaults to `plugin` for safe upgrades. Stage every binding before switching when possible. With zero bindings, `cpa-native` still loads exclusively and denies all inference requests while management routes remain available; it never fails open by dropping the exclusive provider.
+- Keep the original keys in CPA's top-level `api-keys` list. CPA Usage Keeper syncs that list as metadata; successful native auth returns the original CPA key as its principal, so Keeper continues grouping usage by the same key without changes.
+- The current CPA plugin ABI does not publish top-level key changes to plugins. When deleting or rotating a CPA key, also remove its old policy binding and bind the replacement; the WebUI flags bindings no longer present in CPA's live list.
 - Concurrency is **disabled by default**, so upgrading does not change existing request behavior.
 - Prefer creating keys and aliases in the **Web UI** or Management API; seed YAML `keys` is mainly for first boot.
 - Never commit real key hashes, management secrets, or live host URLs into public docs.
@@ -178,7 +185,7 @@ UI areas:
 
 | Tab / page | Use for |
 |------------|---------|
-| Keys | Create / edit / rotate / delete keys; bind models or aliases; RPM & budgets |
+| Keys | Bind existing CPA keys; edit/delete policies; bind models or aliases; RPM & budgets |
 | Mapping → Aliases | Global multi-target aliases, dispatch, pricing |
 | Mapping → Classification | Custom credential groups + match preview |
 | Model picker | Catalog of providers; tier / **Custom · …** subgroups |
@@ -200,8 +207,9 @@ Exact paths (no path templates). Auth: CPA management bearer token.
 
 **Keys**
 
-- `GET/POST/PATCH/DELETE …/keys` (`id` in query or body for mutate)
-- `POST …/keys/rotate?id=…`
+- `GET/PATCH/DELETE …/keys` (`id` in query or body for mutate)
+- `POST …/native-keys/bind` — bind one existing CPA key without persisting plaintext
+- Legacy `plugin` mode only: `POST …/keys` and `POST …/keys/rotate?id=…`
 - `POST …/keys/reset-rpm?id=…`
 - `GET …/keys/usage?id=…`
 - `GET …/status`
@@ -222,14 +230,15 @@ Exact paths (no path templates). Auth: CPA management bearer token.
 - `POST …/classify-preview` — group → credential ids (UI preview; bare group names)
 - `POST …/catalog` — body: auth-file credentials + models; response: picker `entries` with `classify:` groups
 
-Create key (plain key returned **once**):
+Bind an existing CPA key (plaintext exists only in this management request):
 
 ```bash
-curl -X POST "$CPA/v0/management/plugins/cpa-key-policy/keys" \
+curl -X POST "$CPA/v0/management/plugins/cpa-key-policy/native-keys/bind" \
   -H "Authorization: Bearer $MANAGEMENT_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "id": "team-a",
+    "key": "'$CPA_API_KEY'",
+    "id": "team-a-policy",
     "name": "Team A",
     "rpm": 60,
     "models": [
@@ -266,7 +275,8 @@ curl -X POST "$CPA/v0/management/plugins/cpa-key-policy/aliases" \
 | RPM / budget exceeded | Rejected |
 | Concurrency full | Fair queue; 429 only on timeout or per-key queue overflow |
 | Group set, no matching auth file | `auth_not_found` / unavailable (no cross-tier leak) |
-| Unknown key | Plugin declines; CPA may try native `api-keys` |
+| Unbound/disabled/policy-denied key in `cpa-native` | Authentication fails; exclusive auth prevents native-provider fallback |
+| Unknown key in legacy `plugin` mode | Plugin declines and CPA may try another provider |
 | Non-stream chat response | Top-level `model` rewritten to alias |
 | Stream | Body not rewritten (v1) |
 
@@ -283,9 +293,9 @@ Per-key `allow_models_endpoint`: **binary** — deny (401) or full global list. 
 2. Enable `plugins` + `cpa-key-policy` in CPA config; set `state_file`.
 3. Open the Web UI with the management secret.
 4. (Optional) Define **classify rules** if you need custom credential buckets.
-5. Create **aliases** (multi-target / pricing) and/or pick models per key (with tier or Custom group).
-6. Create keys, save the one-time `plain_key`, hand out to clients.
-7. Client: OpenAI-compatible base URL = CPA; `Authorization: Bearer cpa_…`; `model` = alias name.
+5. While still in `auth_mode: plugin`, bind every existing CPA key and assign models/policies.
+6. Confirm all bindings are enabled, then switch to `auth_mode: cpa-native` and reload/restart CPA.
+7. Clients keep their original CPA keys: OpenAI-compatible base URL = CPA; `Authorization: Bearer <existing CPA key>`; `model` = alias name.
 8. Ensure openai-compat channels list the models you map; empty model lists → host “no auth” errors.
 
 ---

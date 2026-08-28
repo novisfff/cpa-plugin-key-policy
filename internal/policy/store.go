@@ -18,6 +18,7 @@ type Store struct {
 	updateMu   sync.Mutex
 	persistMu  sync.Mutex
 	enabled    bool
+	authMode   AuthMode
 	statePath  string
 	keys       map[string]*KeyConfig
 	keysByHash map[string]*KeyConfig
@@ -86,6 +87,7 @@ type AuthDecision struct {
 func NewStore() *Store {
 	return &Store{
 		enabled:           DefaultConfig().Enabled,
+		authMode:          AuthModePlugin,
 		keys:              make(map[string]*KeyConfig),
 		keysByHash:        make(map[string]*KeyConfig),
 		keysByCallerScope: make(map[string]string),
@@ -150,7 +152,7 @@ func (s *Store) Configure(cfg Config) error {
 		}
 		// Validate state keys against the global alias table. normalizeConfig
 		// also auto-migrates any state keys still using per-key Models.
-		merged := Config{Enabled: cfg.Enabled, StateFile: cfg.StateFile, Keys: keys, Aliases: stateAliases, ClassifyRules: stateRules}
+		merged := Config{Enabled: cfg.Enabled, AuthMode: cfg.AuthMode, StateFile: cfg.StateFile, Keys: keys, Aliases: stateAliases, ClassifyRules: stateRules}
 		if errNorm := normalizeConfig(&merged); errNorm != nil {
 			return fmt.Errorf("load state: %w", errNorm)
 		}
@@ -189,7 +191,6 @@ func (s *Store) Configure(cfg Config) error {
 		}
 		next[item.ID] = &item
 	}
-
 	s.mu.Lock()
 	// Stop any prior flusher before rebuilding keys/state path. (StopUsageFlusher
 	// above already handled the flush-then-stop for the old path; this guards
@@ -202,6 +203,7 @@ func (s *Store) Configure(cfg Config) error {
 	// serializes this replacement with management mutations, so a revoked or
 	// deleted key cannot be resurrected from an older in-memory snapshot.
 	s.enabled = cfg.Enabled
+	s.authMode = cfg.AuthMode
 	s.statePath = statePath
 	s.concurrencyConfig = cfg.Concurrency
 	// Store the global alias table and classify rules for routing/billing.
@@ -252,6 +254,12 @@ func (s *Store) Enabled() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.enabled
+}
+
+func (s *Store) AuthMode() AuthMode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.authMode
 }
 
 func (s *Store) runtimeComponents() (*RateLimiter, *usageLedger) {
@@ -318,6 +326,9 @@ func (s *Store) Authenticate(method, path string, headers http.Header, query map
 		KeyID:     key.ID,
 		Principal: key.ID,
 		ModelList: IsModelsEndpoint(path),
+	}
+	if s.AuthMode() == AuthModeCPANative {
+		decision.Principal = rawKey
 	}
 	if !key.Enabled {
 		decision.Reason = "key_disabled"
@@ -394,7 +405,7 @@ func (s *Store) Authenticate(method, path string, headers http.Header, query map
 		}
 		// failed=false so the per_call branch charges PerCallUSD. This is the
 		// intended behavior for this workaround (no refund on upstream failure).
-		s.RecordUsage(key.ID, alias, model, false, UsageDetail{})
+		s.RecordUsage(decision.Principal, alias, model, false, UsageDetail{})
 		decision.PreCharged = true
 	}
 
@@ -611,10 +622,17 @@ func (s *Store) RecordUsage(apiKeyOrID, alias, model string, failed bool, detail
 	if !s.Enabled() {
 		return 0
 	}
-	// Match by ID first (the documented wire value), then by plaintext secret.
-	key := s.findByID(apiKeyOrID)
-	if key == nil || !key.Enabled {
+	// Plugin mode receives the internal key ID from the host. Native mode
+	// intentionally receives the original CPA key so Usage Keeper can use the
+	// same identity; resolve it only through the active source hash index.
+	var key *KeyConfig
+	if s.AuthMode() == AuthModeCPANative {
 		key = s.findBySecret(apiKeyOrID)
+	} else {
+		key = s.findByID(apiKeyOrID)
+		if key == nil || !key.Enabled {
+			key = s.findBySecret(apiKeyOrID)
+		}
 	}
 	if key == nil || !key.Enabled {
 		return 0
@@ -838,13 +856,21 @@ func (s *Store) rebuildKeyIndexesLocked() {
 	sort.Strings(ids)
 	byHash := make(map[string]*KeyConfig, len(ids))
 	byCallerScope := make(map[string]string, len(ids))
+	activeSource := KeySourcePlugin
+	if s.authMode == AuthModeCPANative {
+		activeSource = KeySourceCPANative
+	}
 	for _, id := range ids {
 		key := s.keys[id]
-		if key == nil {
+		if key == nil || key.KeySource != activeSource {
 			continue
 		}
 		if key.Enabled {
-			if scope := callerScopeForPrincipal(key.ID); scope != "" {
+			scope := key.CallerScope
+			if activeSource == KeySourcePlugin {
+				scope = CallerScopeForPrincipal(key.ID)
+			}
+			if scope != "" {
 				byCallerScope[scope] = key.ID
 			}
 		}
@@ -874,13 +900,17 @@ func (s *Store) PrincipalForCallerScope(scope string) (string, bool) {
 	return principal, ok
 }
 
-func callerScopeForPrincipal(principal string) string {
+func CallerScopeForPrincipal(principal string) string {
 	principal = strings.TrimSpace(principal)
 	if principal == "" {
 		return ""
 	}
 	sum := sha256.Sum256([]byte("cli-proxy-api:caller-scope:v1\x00" + principal))
 	return hex.EncodeToString(sum[:])
+}
+
+func callerScopeForPrincipal(principal string) string {
+	return CallerScopeForPrincipal(principal)
 }
 
 func (k *KeyConfig) ModelForAlias(alias string) (ModelRule, bool) {
@@ -1460,6 +1490,7 @@ func (f *usageFlusher) loop() {
 func (s *Store) Status() map[string]any {
 	s.mu.RLock()
 	enabled := s.enabled
+	authMode := s.authMode
 	statePath := s.statePath
 	keys := s.keysSnapshotLocked()
 	limiter := s.limiter
@@ -1471,6 +1502,7 @@ func (s *Store) Status() map[string]any {
 	}
 	out := map[string]any{
 		"enabled":     enabled,
+		"auth_mode":   authMode,
 		"state_file":  statePath,
 		"key_count":   len(keys),
 		"rpm_usage":   rpmUsage,

@@ -8,6 +8,11 @@ plugins:
     cpa-key-policy:
       enabled: true
       priority: 10
+      # Safe upgrade default: "plugin" keeps legacy generated cpa_... keys.
+      # To reuse CPA's top-level api-keys, bind every key in the Web UI first,
+      # then switch this to "cpa-native". Native mode is exclusive and denies
+      # every CPA key without an enabled policy binding.
+      auth_mode: "plugin"
       # Runtime source of truth once created (keys, aliases, classify rules, usage).
       state_file: "cpa-key-policy-state.json"
 
@@ -26,6 +31,7 @@ plugins:
         - id: "team-a"
           name: "Team A"
           enabled: true
+          key_source: "plugin"
           key_hash: "sha256:replace-with-hash"
           key_preview: "cpa_abc...xyz"
           rpm: 60

@@ -2,6 +2,7 @@ package policy
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,8 +16,23 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type AuthMode string
+
+const (
+	AuthModePlugin    AuthMode = "plugin"
+	AuthModeCPANative AuthMode = "cpa-native"
+)
+
+type KeySource string
+
+const (
+	KeySourcePlugin    KeySource = "plugin"
+	KeySourceCPANative KeySource = "cpa-native"
+)
+
 type Config struct {
 	Enabled     bool              `yaml:"enabled" json:"enabled"`
+	AuthMode    AuthMode          `yaml:"auth_mode,omitempty" json:"auth_mode,omitempty"`
 	StateFile   string            `yaml:"state_file" json:"state_file"`
 	Keys        []KeyConfig       `yaml:"keys" json:"keys"`
 	Concurrency ConcurrencyConfig `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
@@ -114,13 +130,15 @@ func DefaultConcurrencyConfig() ConcurrencyConfig {
 }
 
 type KeyConfig struct {
-	ID         string      `yaml:"id" json:"id"`
-	Name       string      `yaml:"name" json:"name"`
-	Enabled    bool        `yaml:"enabled" json:"enabled"`
-	KeyHash    string      `yaml:"key_hash" json:"key_hash"`
-	KeyPreview string      `yaml:"key_preview" json:"key_preview"`
-	RPM        int         `yaml:"rpm" json:"rpm"`
-	Models     []ModelRule `yaml:"models" json:"models"`
+	ID          string      `yaml:"id" json:"id"`
+	Name        string      `yaml:"name" json:"name"`
+	Enabled     bool        `yaml:"enabled" json:"enabled"`
+	KeyHash     string      `yaml:"key_hash" json:"key_hash"`
+	KeyPreview  string      `yaml:"key_preview" json:"key_preview"`
+	KeySource   KeySource   `yaml:"key_source,omitempty" json:"key_source,omitempty"`
+	CallerScope string      `yaml:"caller_scope,omitempty" json:"caller_scope,omitempty"`
+	RPM         int         `yaml:"rpm" json:"rpm"`
+	Models      []ModelRule `yaml:"models" json:"models"`
 	// Aliases references global alias mappings by name. When non-empty, the key
 	// uses these aliases for routing and billing. Per-key price overrides are
 	// optional (nil = use global alias pricing). This field coexists with
@@ -372,6 +390,7 @@ type State struct {
 func DefaultConfig() Config {
 	return Config{
 		Enabled:     true,
+		AuthMode:    AuthModePlugin,
 		StateFile:   "cpa-key-policy-state.json",
 		Concurrency: DefaultConcurrencyConfig(),
 	}
@@ -512,6 +531,14 @@ func mergeAliasTarget(a *AliasMapping, target AliasTarget) {
 }
 
 func normalizeConfig(cfg *Config) error {
+	switch AuthMode(strings.ToLower(strings.TrimSpace(string(cfg.AuthMode)))) {
+	case "", AuthModePlugin:
+		cfg.AuthMode = AuthModePlugin
+	case AuthModeCPANative:
+		cfg.AuthMode = AuthModeCPANative
+	default:
+		return fmt.Errorf("auth_mode %q must be %q or %q", cfg.AuthMode, AuthModePlugin, AuthModeCPANative)
+	}
 	if err := normalizeConcurrencyConfig(&cfg.Concurrency); err != nil {
 		return err
 	}
@@ -527,6 +554,15 @@ func normalizeConfig(cfg *Config) error {
 		key.Name = strings.TrimSpace(key.Name)
 		key.KeyHash = strings.TrimSpace(key.KeyHash)
 		key.KeyPreview = strings.TrimSpace(key.KeyPreview)
+		key.CallerScope = strings.ToLower(strings.TrimSpace(key.CallerScope))
+		switch KeySource(strings.ToLower(strings.TrimSpace(string(key.KeySource)))) {
+		case "", KeySourcePlugin:
+			key.KeySource = KeySourcePlugin
+		case KeySourceCPANative:
+			key.KeySource = KeySourceCPANative
+		default:
+			return fmt.Errorf("key %q key_source %q must be %q or %q", key.ID, key.KeySource, KeySourcePlugin, KeySourceCPANative)
+		}
 		if key.ID == "" {
 			return errors.New("key id is required")
 		}
@@ -536,6 +572,17 @@ func normalizeConfig(cfg *Config) error {
 		seen[key.ID] = struct{}{}
 		if key.Name == "" {
 			key.Name = key.ID
+		}
+		if key.KeySource == KeySourceCPANative {
+			hashText := strings.TrimPrefix(strings.ToLower(key.KeyHash), HashPrefix)
+			rawHash, hashErr := hex.DecodeString(hashText)
+			if !strings.HasPrefix(strings.ToLower(key.KeyHash), HashPrefix) || hashErr != nil || len(rawHash) != 32 {
+				return fmt.Errorf("key %q key_hash must be a sha256 value", key.ID)
+			}
+			rawScope, err := hex.DecodeString(key.CallerScope)
+			if err != nil || len(rawScope) != 32 {
+				return fmt.Errorf("key %q caller_scope must be a 64-character SHA-256 hex value", key.ID)
+			}
 		}
 		if key.RPM < 0 {
 			return fmt.Errorf("key %q rpm cannot be negative", key.ID)

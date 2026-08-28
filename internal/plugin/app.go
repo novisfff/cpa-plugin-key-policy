@@ -130,6 +130,7 @@ func (a *App) registration() Registration {
 			GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI",
 			ConfigFields: []ConfigField{
 				{Name: "enabled", Type: "boolean", Description: "Enable or disable this plugin without unloading it."},
+				{Name: "auth_mode", Type: "string", EnumValues: []string{string(policy.AuthModePlugin), string(policy.AuthModeCPANative)}, Description: "Use plugin-owned keys or bind CPA's native api-keys."},
 				{Name: "state_file", Type: "string", Description: "JSON state file used for key policy changes made through the Management API."},
 				{Name: "keys", Type: "array", Description: "Initial downstream key policy list. State file wins after it exists."},
 				{Name: "concurrency", Type: "object", Description: "Optional dynamic fair global concurrency limiter; disabled by default."},
@@ -137,7 +138,7 @@ func (a *App) registration() Registration {
 		},
 		Capabilities: Capabilities{
 			FrontendAuthProvider:          true,
-			FrontendAuthProviderExclusive: false,
+			FrontendAuthProviderExclusive: a.store.AuthMode() == policy.AuthModeCPANative,
 			ModelRouter:                   true,
 			Scheduler:                     true,
 			RequestInterceptor:            true,
@@ -505,6 +506,7 @@ func (a *App) managementRegistration() ManagementRegistrationResponse {
 		Routes: []ManagementRoute{
 			{Method: http.MethodGet, Path: base + "/keys", Description: "List downstream CPA key policies."},
 			{Method: http.MethodPost, Path: base + "/keys", Description: "Create a downstream CPA key policy."},
+			{Method: http.MethodPost, Path: base + "/native-keys/bind", Description: "Bind a CPA native api-key to a policy without persisting plaintext."},
 			{Method: http.MethodPatch, Path: base + "/keys", Description: "Update a downstream CPA key policy by id."},
 			{Method: http.MethodDelete, Path: base + "/keys", Description: "Delete a downstream CPA key policy by id."},
 			{Method: http.MethodPost, Path: base + "/keys/rotate", Description: "Rotate one downstream CPA key by id."},
@@ -550,6 +552,8 @@ func (a *App) handleManagement(raw []byte) ([]byte, error) {
 		return OKEnvelope(jsonResponse(http.StatusOK, map[string]any{"keys": a.publicKeys(a.store.Keys())}))
 	case req.Method == http.MethodPost && path == base+"/keys":
 		return OKEnvelope(a.createKey(req.Body))
+	case req.Method == http.MethodPost && path == base+"/native-keys/bind":
+		return OKEnvelope(a.bindNativeKey(req.Body))
 	case req.Method == http.MethodPatch && path == base+"/keys":
 		return OKEnvelope(a.patchKey(req.Body))
 	case req.Method == http.MethodDelete && path == base+"/keys":
@@ -609,6 +613,7 @@ type publicKey struct {
 	Name                string               `json:"name"`
 	Enabled             bool                 `json:"enabled"`
 	KeyPreview          string               `json:"key_preview"`
+	KeySource           policy.KeySource     `json:"key_source"`
 	RPM                 int                  `json:"rpm"`
 	Models              []policy.ModelRule   `json:"models"`
 	Aliases             []policy.KeyAliasRef `json:"aliases"`
@@ -621,6 +626,9 @@ type publicKey struct {
 }
 
 func (a *App) createKey(body []byte) ManagementResponse {
+	if a.store.AuthMode() == policy.AuthModeCPANative {
+		return jsonError(http.StatusConflict, "native_mode", "cpa-native mode does not generate plugin keys; bind an existing CPA api-key")
+	}
 	var req keyWriteRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		return jsonError(http.StatusBadRequest, "invalid_json", err.Error())
@@ -661,6 +669,7 @@ func (a *App) createKey(body []byte) ManagementResponse {
 		Enabled:             enabled,
 		KeyHash:             hash,
 		KeyPreview:          policy.PreviewKey(plain),
+		KeySource:           policy.KeySourcePlugin,
 		RPM:                 rpm,
 		Models:              req.Models,
 		Aliases:             req.Aliases,
@@ -677,6 +686,63 @@ func (a *App) createKey(body []byte) ManagementResponse {
 		"generated": generated,
 	}
 	return jsonResponse(http.StatusCreated, bodyMap)
+}
+
+func (a *App) bindNativeKey(body []byte) ManagementResponse {
+	var req keyWriteRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return jsonError(http.StatusBadRequest, "invalid_json", err.Error())
+	}
+	plain := strings.TrimSpace(req.Key)
+	if plain == "" {
+		return jsonError(http.StatusBadRequest, "missing_key", "an existing CPA api-key is required")
+	}
+	hash, err := policy.HashKey(plain)
+	if err != nil {
+		return jsonError(http.StatusBadRequest, "invalid_key", err.Error())
+	}
+	for _, existing := range a.store.Keys() {
+		if strings.EqualFold(strings.TrimSpace(existing.KeyHash), hash) {
+			return jsonError(http.StatusConflict, "already_bound", "this CPA api-key is already bound")
+		}
+	}
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		id, err = policy.NativeKeyID(plain)
+		if err != nil {
+			return jsonError(http.StatusBadRequest, "invalid_key", err.Error())
+		}
+	}
+	for _, existing := range a.store.Keys() {
+		if existing.ID == id {
+			return jsonError(http.StatusConflict, "duplicate_id", "a key policy with this id already exists")
+		}
+	}
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	rpm := 0
+	if req.RPM != nil {
+		rpm = *req.RPM
+	}
+	name := id
+	if req.Name != nil && strings.TrimSpace(*req.Name) != "" {
+		name = strings.TrimSpace(*req.Name)
+	}
+	item := policy.KeyConfig{
+		ID: id, Name: name, Enabled: enabled,
+		KeyHash: hash, KeyPreview: policy.PreviewKey(plain),
+		KeySource: policy.KeySourceCPANative, CallerScope: policy.CallerScopeForPrincipal(plain),
+		RPM: rpm, Models: req.Models, Aliases: req.Aliases,
+		DailyLimitUSD:       applyFloat64(req.DailyLimitUSD, 0),
+		WeeklyLimitUSD:      applyFloat64(req.WeeklyLimitUSD, 0),
+		AllowModelsEndpoint: applyBool(req.AllowModelsEndpoint, false),
+	}
+	if err := a.store.UpsertKey(item, true); err != nil {
+		return jsonError(http.StatusBadRequest, "invalid_policy", err.Error())
+	}
+	return jsonResponse(http.StatusCreated, map[string]any{"key": a.publicKeyFromConfig(item)})
 }
 
 func (a *App) patchKey(body []byte) ManagementResponse {
@@ -725,6 +791,9 @@ func (a *App) patchKey(body []byte) ManagementResponse {
 		current.Aliases = req.Aliases
 	}
 	if strings.TrimSpace(req.Key) != "" {
+		if current.KeySource == policy.KeySourceCPANative {
+			return jsonError(http.StatusConflict, "native_key_immutable", "delete and bind a CPA native key instead of replacing its secret")
+		}
 		hash, err := policy.HashKey(req.Key)
 		if err != nil {
 			return jsonError(http.StatusBadRequest, "invalid_key", err.Error())
@@ -746,6 +815,14 @@ func (a *App) deleteKey(id string) ManagementResponse {
 }
 
 func (a *App) rotateKey(id string) ManagementResponse {
+	if a.store.AuthMode() == policy.AuthModeCPANative {
+		return jsonError(http.StatusConflict, "native_mode", "cpa-native mode does not rotate plugin-owned keys")
+	}
+	for _, item := range a.store.Keys() {
+		if item.ID == strings.TrimSpace(id) && item.KeySource == policy.KeySourceCPANative {
+			return jsonError(http.StatusConflict, "native_key_rotation", "rotate the key in CPA, then replace its policy binding")
+		}
+	}
 	plain, item, err := a.store.RotateKey(id)
 	if err != nil {
 		return storeError(err)
@@ -827,6 +904,7 @@ func (a *App) publicKeyFromConfig(key policy.KeyConfig) publicKey {
 		Name:       key.Name,
 		Enabled:    key.Enabled,
 		KeyPreview: key.KeyPreview,
+		KeySource:  key.KeySource,
 		RPM:        key.RPM,
 		// Ensure models/aliases always serialize as [] (never null). A nil slice
 		// would marshal to JSON null, which the UI accesses as .length and

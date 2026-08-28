@@ -24,6 +24,15 @@ func GenerateKey() (string, error) {
 	return "cpa_" + base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
+func NativeKeyID(key string) (string, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", errors.New("key is required")
+	}
+	sum := sha256.Sum256([]byte(key))
+	return "native-" + hex.EncodeToString(sum[:6]), nil
+}
+
 func HashKey(key string) (string, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {

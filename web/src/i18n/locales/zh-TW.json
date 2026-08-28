@@ -51,6 +51,8 @@
     "notFound": "找不到該 key",
     "rotated": "新 Key 已產生（輪換）",
     "detail": "詳情",
+    "native": "CPA 原生",
+    "stale": "已從 CPA 刪除",
     "mobile": {
       "revoke": "吊銷",
       "swipeHint": "左滑可吊銷",
@@ -70,10 +72,17 @@
   },
   "new": {
     "title": "新建 Key",
-    "create": "建立 Key"
+    "bindTitle": "綁定 CPA Key",
+    "create": "建立／綁定策略",
+    "selectNativeKey": "選擇 CPA 系統已有的 api-key",
+    "noNativeKeys": "CPA 中沒有可用的 api-key",
+    "nativeKeyNote": "只儲存不可逆雜湊與策略，不會新建或持久化明文 Key。",
+    "nativeKeyRequired": "請選擇 CPA api-key",
+    "nativeLoadFailed": "讀取 CPA api-keys 失敗"
   },
   "keyForm": {
     "idLabel": "Key ID *",
+    "idOptionalLabel": "策略 ID（可選，留空自動產生）",
     "idPlaceholder": "例如 team-a",
     "nameLabel": "名稱（可選）",
     "namePlaceholder": "留空則用 ID",

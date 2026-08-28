@@ -51,6 +51,7 @@ export interface KeyPublic {
   name: string;
   enabled: boolean;
   key_preview: string;
+  key_source: "plugin" | "cpa-native";
   rpm: number;
   models: ModelRule[];
   aliases?: KeyAliasRef[];
@@ -137,9 +138,14 @@ export interface CatalogModel {
 
 export interface StatusResponse {
   enabled: boolean;
+  auth_mode: "plugin" | "cpa-native";
   state_file: string;
   key_count: number;
   rpm_usage?: Record<string, unknown>;
+}
+
+export interface NativeKeyBindResponse {
+  key: KeyPublic;
 }
 
 export interface ConcurrencyConfig {

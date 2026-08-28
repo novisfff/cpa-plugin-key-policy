@@ -1,5 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { buildModelRules } from "./keys";
+import { buildModelRules, maskCPAKey, normalizeCPAAPIKeys } from "./keys";
+
+describe("CPA native api-keys", () => {
+  it("normalizes the CPA management response without inventing keys", () => {
+    expect(normalizeCPAAPIKeys({ "api-keys": [" key-a ", "", "key-a", "key-b", 1] })).toEqual(["key-a", "key-b"]);
+    expect(normalizeCPAAPIKeys({ api_keys: ["wrong-shape"] })).toEqual([]);
+  });
+
+  it("uses the same masked preview as the plugin backend", () => {
+    expect(maskCPAKey("existing-cpa-system-key")).toBe("existin...m-key");
+    expect(maskCPAKey("short-key")).toBe("short-key");
+  });
+});
 
 describe("buildModelRules", () => {
   it("maps alias = target_model and lowercases provider", () => {
