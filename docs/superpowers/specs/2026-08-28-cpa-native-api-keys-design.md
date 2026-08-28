@@ -212,7 +212,10 @@ complete rollback.
 - Missing/invalid caller scope on a native state entry fails validation or
   leaves concurrency admission fail-closed when concurrency is enabled.
 - A configuration or mode switch to `cpa-native` with zero enabled native
-  bindings is rejected to prevent accidental total lockout.
+  bindings still loads and registers the exclusive provider, then denies every
+  inference key. Rejecting plugin registration would remove exclusivity and
+  could restore CPA's built-in provider, which is an unsafe fail-open. CPA
+  management routes remain available so bindings can be repaired.
 - Management routes remain protected by CPA's management credential and are
   not authenticated by this frontend provider.
 
