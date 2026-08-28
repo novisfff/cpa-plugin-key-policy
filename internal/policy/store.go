@@ -1,6 +1,8 @@
 package policy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,8 +21,11 @@ type Store struct {
 	statePath  string
 	keys       map[string]*KeyConfig
 	keysByHash map[string]*KeyConfig
-	limiter    *RateLimiter
-	usage      *usageLedger
+	// keysByCallerScope resolves CLIProxyAPI's irreversible caller_scope to an
+	// enabled key ID without copying and scanning every KeyConfig per request.
+	keysByCallerScope map[string]string
+	limiter           *RateLimiter
+	usage             *usageLedger
 	// concurrencyConfig is persisted alongside the existing state and consumed
 	// by the plugin App's request-lifecycle limiter.
 	concurrencyConfig ConcurrencyConfig
@@ -83,6 +88,7 @@ func NewStore() *Store {
 		enabled:           DefaultConfig().Enabled,
 		keys:              make(map[string]*KeyConfig),
 		keysByHash:        make(map[string]*KeyConfig),
+		keysByCallerScope: make(map[string]string),
 		limiter:           NewRateLimiter(),
 		usage:             newUsageLedger(time.Now),
 		concurrencyConfig: DefaultConcurrencyConfig(),
@@ -205,7 +211,7 @@ func (s *Store) Configure(cfg Config) error {
 	}
 	s.classifyRules = cfg.ClassifyRules
 	s.keys = next
-	s.rebuildKeysByHashLocked()
+	s.rebuildKeyIndexesLocked()
 	s.rrCounters = make(map[string]int)
 	s.pendingPicks = make(map[string][]pendingPick)
 	if s.limiter == nil {
@@ -824,17 +830,23 @@ func (s *Store) findByID(id string) *KeyConfig {
 	return &copy
 }
 
-func (s *Store) rebuildKeysByHashLocked() {
+func (s *Store) rebuildKeyIndexesLocked() {
 	ids := make([]string, 0, len(s.keys))
 	for id := range s.keys {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	byHash := make(map[string]*KeyConfig, len(ids))
+	byCallerScope := make(map[string]string, len(ids))
 	for _, id := range ids {
 		key := s.keys[id]
 		if key == nil {
 			continue
+		}
+		if key.Enabled {
+			if scope := callerScopeForPrincipal(key.ID); scope != "" {
+				byCallerScope[scope] = key.ID
+			}
 		}
 		hash := strings.ToLower(strings.TrimSpace(key.KeyHash))
 		if hash == "" {
@@ -845,6 +857,30 @@ func (s *Store) rebuildKeysByHashLocked() {
 		}
 	}
 	s.keysByHash = byHash
+	s.keysByCallerScope = byCallerScope
+}
+
+// PrincipalForCallerScope resolves CLIProxyAPI's stable, irreversible
+// caller_scope metadata to an enabled downstream key ID. The lookup is O(1)
+// and does not expose or copy the key's secret or policy configuration.
+func (s *Store) PrincipalForCallerScope(scope string) (string, bool) {
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	if scope == "" {
+		return "", false
+	}
+	s.mu.RLock()
+	principal, ok := s.keysByCallerScope[scope]
+	s.mu.RUnlock()
+	return principal, ok
+}
+
+func callerScopeForPrincipal(principal string) string {
+	principal = strings.TrimSpace(principal)
+	if principal == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("cli-proxy-api:caller-scope:v1\x00" + principal))
+	return hex.EncodeToString(sum[:])
 }
 
 func (k *KeyConfig) ModelForAlias(alias string) (ModelRule, bool) {
@@ -1001,7 +1037,7 @@ func (s *Store) UpsertKey(input KeyConfig, persist bool) error {
 		key.Models = resolveAliasRefsToModels(key.Aliases, aliasLookup)
 	}
 	s.keys[key.ID] = &key
-	s.rebuildKeysByHashLocked()
+	s.rebuildKeyIndexesLocked()
 	s.clearPendingPicksForKeyLocked(key.ID)
 	// Update the store's global alias table if migration added new aliases.
 	s.updateAliasesLocked(cfg.Aliases)
@@ -1030,7 +1066,7 @@ func (s *Store) DeleteKey(id string) error {
 		return ErrUnknownKey
 	}
 	delete(s.keys, id)
-	s.rebuildKeysByHashLocked()
+	s.rebuildKeyIndexesLocked()
 	s.clearPendingPicksForKeyLocked(id)
 	keys := s.keysSnapshotLocked()
 	usage := s.usageSnapshotLocked()
@@ -1073,7 +1109,7 @@ func (s *Store) RotateKey(id string) (string, KeyConfig, error) {
 	key.UpdatedAt = time.Now().UTC()
 	copy := *key
 	copy.Models = append([]ModelRule(nil), key.Models...)
-	s.rebuildKeysByHashLocked()
+	s.rebuildKeyIndexesLocked()
 	s.clearPendingPicksForKeyLocked(id)
 	keys := s.keysSnapshotLocked()
 	usage := s.usageSnapshotLocked()

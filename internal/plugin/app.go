@@ -29,7 +29,6 @@ const classifyCacheCapacity = 4096
 
 func NewApp() *App {
 	store := policy.NewStore()
-	_ = store.Configure(policy.DefaultConfig())
 	return &App{
 		store:                store,
 		classifyCache:        make(map[string][]string),

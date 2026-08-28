@@ -2,8 +2,6 @@ package plugin
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
@@ -353,10 +351,8 @@ func (a *App) concurrencyPrincipal(req RequestInterceptRequest) string {
 		return ""
 	}
 	if scope := metadataString(req.Metadata, callerScopeMetadataKey); scope != "" {
-		for _, key := range a.store.Keys() {
-			if key.Enabled && constantScopeEqual(scope, callerScopeForPrincipal(key.ID)) {
-				return key.ID
-			}
+		if principal, ok := a.store.PrincipalForCallerScope(scope); ok {
+			return principal
 		}
 	}
 	rawKey := policy.ExtractAPIKey(req.Headers, nil)
@@ -379,31 +375,6 @@ func metadataString(metadata map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
-}
-
-// callerScopeForPrincipal mirrors CLIProxyAPI's documented, irreversible
-// CallerScope namespace. The limiter stores the resolved key ID, never the
-// downstream secret or Authorization header.
-func callerScopeForPrincipal(principal string) string {
-	principal = strings.TrimSpace(principal)
-	if principal == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte("cli-proxy-api:caller-scope:v1\x00" + principal))
-	return hex.EncodeToString(sum[:])
-}
-
-func constantScopeEqual(left, right string) bool {
-	left = strings.ToLower(strings.TrimSpace(left))
-	right = strings.ToLower(strings.TrimSpace(right))
-	if len(left) != len(right) || left == "" {
-		return false
-	}
-	var diff byte
-	for index := range left {
-		diff |= left[index] ^ right[index]
-	}
-	return diff == 0
 }
 
 func concurrencyErrorResponse(status int, message, code string, retry bool) RequestInterceptResponse {

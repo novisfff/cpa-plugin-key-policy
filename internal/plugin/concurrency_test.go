@@ -55,6 +55,62 @@ func configureConcurrencyApp(t *testing.T, enabled bool, limit int, timeout time
 	return app, plains
 }
 
+func TestNewAppDoesNotPersistDefaultConcurrencyBeforeRegistration(t *testing.T) {
+	workDir := t.TempDir()
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+	statePath := filepath.Join(workDir, policy.DefaultConfig().StateFile)
+
+	app := NewApp()
+	t.Cleanup(app.Shutdown)
+	if _, err := os.Stat(policy.DefaultConfig().StateFile); !os.IsNotExist(err) {
+		t.Fatalf("state file exists before plugin.register: %v", err)
+	}
+
+	rawYAML := []byte(`
+enabled: true
+concurrency:
+  enabled: true
+  global_limit: 6
+  queue_timeout: 60s
+  max_queue_per_key: 32
+`)
+	request, err := json.Marshal(LifecycleRequest{ConfigYAML: rawYAML})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.HandleMethod(MethodPluginRegister, request); err != nil {
+		t.Fatalf("plugin.register: %v", err)
+	}
+
+	want := policy.ConcurrencyConfig{
+		Enabled:        true,
+		GlobalLimit:    6,
+		QueueTimeout:   policy.Duration(60 * time.Second),
+		MaxQueuePerKey: 32,
+	}
+	if got := app.store.ConcurrencyConfig(); got != want {
+		t.Fatalf("store concurrency = %+v, want %+v", got, want)
+	}
+	state, err := policy.LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState(%q): %v", statePath, err)
+	}
+	if state.Concurrency == nil || *state.Concurrency != want {
+		t.Fatalf("persisted concurrency = %+v, want %+v", state.Concurrency, want)
+	}
+}
+
 func requestInterceptResponse(t *testing.T, raw []byte) RequestInterceptResponse {
 	t.Helper()
 	var env Envelope

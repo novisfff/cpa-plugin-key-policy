@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -401,6 +402,76 @@ func keyIDs(ks []KeyConfig) []string {
 		out[i] = k.ID
 	}
 	return out
+}
+
+func TestCallerScopePrincipalIndexTracksKeyMutations(t *testing.T) {
+	const (
+		teamAScope = "07fd5bb88ccc0e9b46658eeadd4c0931be7daf2c5e02bc08e2c397558b01d0e7"
+		teamBScope = "f7e7b79a55345ff9178322ffdbc623616a4716dccc5bad9202e591cf201970f2"
+	)
+	hashA, err := HashKey("cpa_scope_a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashB, err := HashKey("cpa_scope_b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	teamA := KeyConfig{ID: "team-a", Enabled: true, KeyHash: hashA}
+	teamB := KeyConfig{ID: "team-b", Enabled: false, KeyHash: hashB}
+
+	store := NewStore()
+	if err := store.Configure(Config{
+		Enabled:   true,
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+		Keys:      []KeyConfig{teamA, teamB},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if principal, ok := store.PrincipalForCallerScope("  " + strings.ToUpper(teamAScope) + "  "); !ok || principal != "team-a" {
+		t.Fatalf("team-a scope = (%q, %v), want (team-a, true)", principal, ok)
+	}
+	if principal, ok := store.PrincipalForCallerScope(teamBScope); ok || principal != "" {
+		t.Fatalf("disabled team-b scope = (%q, %v), want empty,false", principal, ok)
+	}
+
+	teamB.Enabled = true
+	if err := store.UpsertKey(teamB, false); err != nil {
+		t.Fatal(err)
+	}
+	if principal, ok := store.PrincipalForCallerScope(teamBScope); !ok || principal != "team-b" {
+		t.Fatalf("enabled team-b scope = (%q, %v), want (team-b, true)", principal, ok)
+	}
+
+	teamA.Enabled = false
+	if err := store.UpsertKey(teamA, false); err != nil {
+		t.Fatal(err)
+	}
+	if principal, ok := store.PrincipalForCallerScope(teamAScope); ok || principal != "" {
+		t.Fatalf("disabled team-a scope = (%q, %v), want empty,false", principal, ok)
+	}
+
+	teamA.Enabled = true
+	if err := store.UpsertKey(teamA, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.RotateKey("team-a"); err != nil {
+		t.Fatal(err)
+	}
+	if principal, ok := store.PrincipalForCallerScope(teamAScope); !ok || principal != "team-a" {
+		t.Fatalf("rotated team-a scope = (%q, %v), want (team-a, true)", principal, ok)
+	}
+
+	if err := store.DeleteKey("team-b"); err != nil {
+		t.Fatal(err)
+	}
+	if principal, ok := store.PrincipalForCallerScope(teamBScope); ok || principal != "" {
+		t.Fatalf("deleted team-b scope = (%q, %v), want empty,false", principal, ok)
+	}
+	if principal, ok := store.PrincipalForCallerScope("not-a-scope"); ok || principal != "" {
+		t.Fatalf("malformed scope = (%q, %v), want empty,false", principal, ok)
+	}
 }
 
 func TestStopUsageFlusherWaitsForWorkerExit(t *testing.T) {
