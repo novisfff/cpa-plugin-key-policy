@@ -31,6 +31,11 @@ In plain words: the plugin can bind policies directly to the keys already presen
 - `auth_mode: cpa-native` (recommended): bind CPA's existing top-level `api-keys`. The plugin stores only SHA-256, a masked preview, and policy data. It generates and persists no plaintext key. Unbound keys are denied by exclusive authentication.
 - `auth_mode: plugin` (compatibility default): retain the legacy plugin-issued `cpa_...` flow. Stage every native binding in this mode before switching.
 
+Each key policy has an optional `allow_all_models` switch. When enabled, the
+plugin skips that key's model allow-list and lets CPA's native model registry
+and router handle the request, so newly added CPA models are available without
+editing the policy again. RPM, budget, and other policy limits still apply.
+
 Each binding holds:
 
 - allowed **models** and/or **aliases**
