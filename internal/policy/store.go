@@ -346,13 +346,13 @@ func (s *Store) Authenticate(method, path string, headers http.Header, query map
 		decision.Reason = "models_endpoint_disabled"
 		return decision
 	}
+	requested := ExtractRequestedModel(path, query, body)
+	decision.Requested = requested
 	if key.AllowAllModels {
 		// Skip only the model allow-list. RPM, budget, and the rest of the
 		// admission checks below must still run for allow-all keys.
 		decision.Reason = "all_models_allowed"
 	} else {
-		requested := ExtractRequestedModel(path, query, body)
-		decision.Requested = requested
 		if requested != "" {
 			// Must use the same multi-target selection as Route (priority /
 			// round-robin), not ModelForAlias which always returns the first
