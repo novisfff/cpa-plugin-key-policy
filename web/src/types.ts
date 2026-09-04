@@ -59,6 +59,7 @@ export interface KeyPublic {
   weekly_limit_usd: number;
   // Per-key override for GET /v1/models (see KeyFormValues).
   allow_models_endpoint?: boolean;
+  allow_all_models?: boolean;
   usage: UsageSummary;
   created_at?: string;
   updated_at?: string;
@@ -75,6 +76,7 @@ export interface KeyWriteRequest {
   daily_limit_usd?: number;
   weekly_limit_usd?: number;
   allow_models_endpoint?: boolean;
+  allow_all_models?: boolean;
 }
 
 export interface CreateKeyResponse {

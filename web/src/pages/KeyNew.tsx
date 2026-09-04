@@ -93,6 +93,7 @@ export default function KeyNew() {
               daily_limit_usd: v.daily_limit_usd,
               weekly_limit_usd: v.weekly_limit_usd,
               allow_models_endpoint: v.allow_models_endpoint,
+              allow_all_models: v.allow_all_models,
             });
             nav("/keys");
             return;
@@ -106,6 +107,7 @@ export default function KeyNew() {
             daily_limit_usd: v.daily_limit_usd,
             weekly_limit_usd: v.weekly_limit_usd,
             allow_models_endpoint: v.allow_models_endpoint,
+            allow_all_models: v.allow_all_models,
           });
           setPlain(r.plain_key);
         }}

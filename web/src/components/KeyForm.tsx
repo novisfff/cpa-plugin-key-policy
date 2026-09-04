@@ -19,6 +19,7 @@ export interface KeyFormValues {
   // downstream key, so the only plugin-enforceable choice is binary: 401 (hide
   // the list) or allow (client sees the full global list). Default false.
   allow_models_endpoint?: boolean;
+  allow_all_models?: boolean;
 }
 
 interface Props {
@@ -89,6 +90,7 @@ export default function KeyForm({
   const [dailyLimit, setDailyLimit] = useState(initial?.daily_limit_usd ?? 0);
   const [weeklyLimit, setWeeklyLimit] = useState(initial?.weekly_limit_usd ?? 0);
   const [allowModels, setAllowModels] = useState<boolean>(initial?.allow_models_endpoint ?? false);
+  const [allowAllModels, setAllowAllModels] = useState<boolean>(initial?.allow_all_models ?? false);
   const t = useT();
 
   // Pricing table keyed by alias (lowercased) so it survives picker re-emits.
@@ -287,6 +289,7 @@ export default function KeyForm({
         daily_limit_usd: dailyLimit,
         weekly_limit_usd: weeklyLimit,
         allow_models_endpoint: allowModels,
+        allow_all_models: allowAllModels,
       });
     } catch (err) {
       const e = err as { response?: { data?: { error?: { message?: string } } }; message?: string };
@@ -594,6 +597,12 @@ export default function KeyForm({
               <span>{t("keyForm.allowModelsLabel")}</span>
             </label>
             <p className="muted kf-hint">{t("keyForm.allowModelsHint")}</p>
+            <label className="switch kf-access-switch" title={t("keyForm.allowAllModelsTitle")}>
+              <input type="checkbox" checked={allowAllModels} onChange={(e) => setAllowAllModels(e.target.checked)} />
+              <span className="track"><span className="thumb" /></span>
+              <span>{t("keyForm.allowAllModelsLabel")}</span>
+            </label>
+            <p className="muted kf-hint">{t("keyForm.allowAllModelsHint")}</p>
           </>
         ))}
         <section className="kf-section mobile-only">
@@ -754,6 +763,17 @@ export default function KeyForm({
         </label>
         <span className="muted" style={{ fontSize: "0.85em", marginLeft: 8 }}>
           {t("keyForm.allowModelsHint")}
+        </span>
+      </div>
+
+      <div className="form-row">
+        <label className="switch" title={t("keyForm.allowAllModelsTitle")}>
+          <input type="checkbox" checked={allowAllModels} onChange={(e) => setAllowAllModels(e.target.checked)} />
+          <span className="track"><span className="thumb" /></span>
+          <span>{t("keyForm.allowAllModelsLabel")}</span>
+        </label>
+        <span className="muted" style={{ fontSize: "0.85em", marginLeft: 8 }}>
+          {t("keyForm.allowAllModelsHint")}
         </span>
       </div>
 
