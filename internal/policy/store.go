@@ -347,23 +347,24 @@ func (s *Store) Authenticate(method, path string, headers http.Header, query map
 		return decision
 	}
 	if key.AllowAllModels {
-		decision.Allowed = true
+		// Skip only the model allow-list. RPM, budget, and the rest of the
+		// admission checks below must still run for allow-all keys.
 		decision.Reason = "all_models_allowed"
-		return decision
-	}
-	requested := ExtractRequestedModel(path, query, body)
-	decision.Requested = requested
-	if requested != "" {
-		// Must use the same multi-target selection as Route (priority /
-		// round-robin), not ModelForAlias which always returns the first
-		// match. Otherwise metadata["group"] can pin the wrong tier while
-		// model.route forwards a different target.
-		rule, ok := s.resolveRuleForAlias(key, requested)
-		if !ok {
-			decision.Reason = "model_not_allowed"
-			return decision
+	} else {
+		requested := ExtractRequestedModel(path, query, body)
+		decision.Requested = requested
+		if requested != "" {
+			// Must use the same multi-target selection as Route (priority /
+			// round-robin), not ModelForAlias which always returns the first
+			// match. Otherwise metadata["group"] can pin the wrong tier while
+			// model.route forwards a different target.
+			rule, ok := s.resolveRuleForAlias(key, requested)
+			if !ok {
+				decision.Reason = "model_not_allowed"
+				return decision
+			}
+			decision.Rule = rule
 		}
-		decision.Rule = rule
 	}
 	limiter, usageLedger := s.runtimeComponents()
 	if limiter != nil && !limiter.Allow(key.ID, key.RPM) {
@@ -383,7 +384,9 @@ func (s *Store) Authenticate(method, path string, headers http.Header, query map
 		}
 	}
 	decision.Allowed = true
-	decision.Reason = "allowed"
+	if decision.Reason == "" {
+		decision.Reason = "allowed"
+	}
 
 	// Remember this request's selected target so Route reuses it (same group /
 	// provider / model). Only stash when the request is actually allowed — a

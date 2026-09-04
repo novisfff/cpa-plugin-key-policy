@@ -94,6 +94,24 @@ func TestStoreAllowAllModelsBypassesAllowList(t *testing.T) {
 	}
 }
 
+func TestStoreAllowAllModelsStillEnforcesRPM(t *testing.T) {
+	plain := "cpa_all_models_rpm"
+	hash, err := HashKey(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore()
+	if err := store.Configure(Config{Enabled: true, StateFile: filepath.Join(t.TempDir(), "state.json"), Keys: []KeyConfig{{ID: "all", Enabled: true, KeyHash: hash, AllowAllModels: true, RPM: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	headers := http.Header{"Authorization": {"Bearer " + plain}}
+	first := store.Authenticate("POST", "/v1/chat/completions", headers, nil, []byte(`{"model":"brand-new-model"}`))
+	second := store.Authenticate("POST", "/v1/chat/completions", headers, nil, []byte(`{"model":"another-new-model"}`))
+	if !first.Allowed || second.Allowed || !second.RateLimited || second.Reason != "rpm_exceeded" {
+		t.Fatalf("allow-all RPM decisions = first %+v, second %+v", first, second)
+	}
+}
+
 func TestStoreAuthenticateRateLimits(t *testing.T) {
 	store, plain := newTestStore(t)
 	headers := http.Header{"Authorization": {"Bearer " + plain}}
