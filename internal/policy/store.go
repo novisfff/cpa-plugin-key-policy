@@ -391,7 +391,7 @@ func (s *Store) Authenticate(method, path string, headers http.Header, query map
 	// Remember this request's selected target so Route reuses it (same group /
 	// provider / model). Only stash when the request is actually allowed — a
 	// rate/cost-limited request never reaches model.route.
-	if requested != "" {
+	if requested != "" && decision.Rule.Alias != "" {
 		s.rememberPick(key.ID, requested, decision.Rule)
 	}
 
