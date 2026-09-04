@@ -153,6 +153,10 @@ type KeyConfig struct {
 	// plugin layer is the binary choice: 401 (hide the list entirely) or
 	// allow (client sees the full global list). Default false = 401.
 	AllowModelsEndpoint bool    `yaml:"allow_models_endpoint,omitempty" json:"allow_models_endpoint,omitempty"`
+	// AllowAllModels bypasses the per-key model allow-list. When enabled,
+	// frontend authentication accepts any requested model and routing is left
+	// to CPA's native model registry, so newly added models work automatically.
+	AllowAllModels      bool    `yaml:"allow_all_models,omitempty" json:"allow_all_models,omitempty"`
 	DailyLimitUSD       float64 `yaml:"daily_limit_usd,omitempty" json:"daily_limit_usd,omitempty"`
 	// WeeklyLimitUSD caps the dollar usage over a rolling 7-day window. 0 = unlimited.
 	WeeklyLimitUSD float64   `yaml:"weekly_limit_usd,omitempty" json:"weekly_limit_usd,omitempty"`

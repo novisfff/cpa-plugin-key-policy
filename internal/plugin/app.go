@@ -606,6 +606,7 @@ type keyWriteRequest struct {
 	DailyLimitUSD       *float64             `json:"daily_limit_usd,omitempty"`
 	WeeklyLimitUSD      *float64             `json:"weekly_limit_usd,omitempty"`
 	AllowModelsEndpoint *bool                `json:"allow_models_endpoint,omitempty"`
+	AllowAllModels      *bool                `json:"allow_all_models,omitempty"`
 }
 
 type publicKey struct {
@@ -620,6 +621,7 @@ type publicKey struct {
 	DailyLimitUSD       float64              `json:"daily_limit_usd"`
 	WeeklyLimitUSD      float64              `json:"weekly_limit_usd"`
 	AllowModelsEndpoint bool                 `json:"allow_models_endpoint,omitempty"`
+	AllowAllModels      bool                 `json:"allow_all_models,omitempty"`
 	Usage               policy.UsageSummary  `json:"usage"`
 	CreatedAt           string               `json:"created_at,omitempty"`
 	UpdatedAt           string               `json:"updated_at,omitempty"`
@@ -676,6 +678,7 @@ func (a *App) createKey(body []byte) ManagementResponse {
 		DailyLimitUSD:       applyFloat64(req.DailyLimitUSD, 0),
 		WeeklyLimitUSD:      applyFloat64(req.WeeklyLimitUSD, 0),
 		AllowModelsEndpoint: applyBool(req.AllowModelsEndpoint, false),
+		AllowAllModels:      applyBool(req.AllowAllModels, false),
 	}
 	if err := a.store.UpsertKey(item, true); err != nil {
 		return jsonError(http.StatusBadRequest, "invalid_policy", err.Error())
@@ -738,6 +741,7 @@ func (a *App) bindNativeKey(body []byte) ManagementResponse {
 		DailyLimitUSD:       applyFloat64(req.DailyLimitUSD, 0),
 		WeeklyLimitUSD:      applyFloat64(req.WeeklyLimitUSD, 0),
 		AllowModelsEndpoint: applyBool(req.AllowModelsEndpoint, false),
+		AllowAllModels:      applyBool(req.AllowAllModels, false),
 	}
 	if err := a.store.UpsertKey(item, true); err != nil {
 		return jsonError(http.StatusBadRequest, "invalid_policy", err.Error())
@@ -783,6 +787,9 @@ func (a *App) patchKey(body []byte) ManagementResponse {
 	}
 	if req.AllowModelsEndpoint != nil {
 		current.AllowModelsEndpoint = *req.AllowModelsEndpoint
+	}
+	if req.AllowAllModels != nil {
+		current.AllowAllModels = *req.AllowAllModels
 	}
 	if req.Models != nil {
 		current.Models = req.Models
@@ -915,6 +922,7 @@ func (a *App) publicKeyFromConfig(key policy.KeyConfig) publicKey {
 		DailyLimitUSD:       key.DailyLimitUSD,
 		WeeklyLimitUSD:      key.WeeklyLimitUSD,
 		AllowModelsEndpoint: key.AllowModelsEndpoint,
+		AllowAllModels:      key.AllowAllModels,
 		Usage:               a.store.UsageSummaryFor(key),
 	}
 	if !key.CreatedAt.IsZero() {

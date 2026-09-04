@@ -346,6 +346,11 @@ func (s *Store) Authenticate(method, path string, headers http.Header, query map
 		decision.Reason = "models_endpoint_disabled"
 		return decision
 	}
+	if key.AllowAllModels {
+		decision.Allowed = true
+		decision.Reason = "all_models_allowed"
+		return decision
+	}
 	requested := ExtractRequestedModel(path, query, body)
 	decision.Requested = requested
 	if requested != "" {

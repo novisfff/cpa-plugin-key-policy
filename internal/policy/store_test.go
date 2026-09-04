@@ -77,6 +77,23 @@ func TestStoreAuthenticateRejectsModelsEndpoint(t *testing.T) {
 	}
 }
 
+func TestStoreAllowAllModelsBypassesAllowList(t *testing.T) {
+	plain := "cpa_all_models"
+	hash, err := HashKey(plain)
+	if err != nil { t.Fatal(err) }
+	store := NewStore()
+	if err := store.Configure(Config{Enabled: true, StateFile: filepath.Join(t.TempDir(), "state.json"), Keys: []KeyConfig{{ID: "all", Enabled: true, KeyHash: hash, AllowAllModels: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	decision := store.Authenticate("POST", "/v1/chat/completions", http.Header{"Authorization": {"Bearer " + plain}}, nil, []byte(`{"model":"brand-new-model"}`))
+	if !decision.Allowed || decision.Reason != "all_models_allowed" {
+		t.Fatalf("decision = %+v, want all_models_allowed", decision)
+	}
+	if _, _, ok := store.Route(http.Header{"Authorization": {"Bearer " + plain}}, nil, "brand-new-model"); ok {
+		t.Fatal("allow-all key should defer unknown model routing to CPA")
+	}
+}
+
 func TestStoreAuthenticateRateLimits(t *testing.T) {
 	store, plain := newTestStore(t)
 	headers := http.Header{"Authorization": {"Bearer " + plain}}
